@@ -21,6 +21,7 @@ add_library(petriterm_core STATIC
     src/engine/ColorPalette.cpp
     src/engine/Renderer.cpp
     src/engine/InputManager.cpp
+    src/engine/RandomNumberGenerator.cpp
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -48,13 +49,16 @@ endif()
 file(GLOB PETRITERM_TEST_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
 if(PETRITERM_TEST_SOURCES)
-    include(FetchContent)
-    FetchContent_Declare(
-        Catch2
-        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-        GIT_TAG v3.5.2
-    )
-    FetchContent_MakeAvailable(Catch2)
+    find_package(Catch2 3 QUIET)
+    if(NOT Catch2_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(
+            Catch2
+            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+            GIT_TAG v3.5.2
+        )
+        FetchContent_MakeAvailable(Catch2)
+    endif()
     add_executable(petriterm_tests ${PETRITERM_TEST_SOURCES})
     target_link_libraries(petriterm_tests PRIVATE petriterm_core Catch2::Catch2WithMain)
     enable_testing()
