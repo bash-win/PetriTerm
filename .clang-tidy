@@ -1,0 +1,29 @@
+---
+# Correctness-focused static analysis. Style/formatting is handled by
+# clang-format; naming is enforced by review against the spec conventions.
+#
+# Disabled checks and why:
+#   portability-avoid-pragma-once   spec mandates a single #pragma once per header
+#   bugprone-reserved-identifier    the ncurses WINDOW forward declaration must
+#                                   name struct _win_st, and the spec forbids the
+#                                   inline NOLINT comment that would scope a waiver
+#   performance-enum-size           small scoped enums are intentionally plain int
+#   bugprone-implicit-widening-of-multiplication-result
+#                                   grid/index math uses small ints throughout
+#   bugprone-easily-swappable-parameters
+#                                   coordinate APIs take adjacent int columns/rows
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -portability-avoid-pragma-once,
+  -bugprone-reserved-identifier,
+  -performance-enum-size,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'petriterm/'
+FormatStyle: file
+...

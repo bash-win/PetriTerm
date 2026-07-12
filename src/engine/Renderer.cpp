@@ -13,8 +13,8 @@ bool isWithinWindow(WINDOW* window, int columnIndex, int rowIndex) {
     int rowCount = 0;
     int columnCount = 0;
     getmaxyx(window, rowCount, columnCount);
-    return columnIndex >= 0 && rowIndex >= 0 &&
-           columnIndex < columnCount && rowIndex < rowCount;
+    return columnIndex >= 0 && rowIndex >= 0 && columnIndex < columnCount &&
+           rowIndex < rowCount;
 }
 
 }
@@ -41,8 +41,8 @@ void Renderer::drawGlyph(int columnIndex, int rowIndex, wchar_t glyph,
     const short pairNumber = static_cast<short>(PAIR_NUMBER(colorAttribute));
     const wchar_t glyphBuffer[2] = {glyph, L'\0'};
     cchar_t renderedCell;
-    setcchar(&renderedCell, glyphBuffer, static_cast<attr_t>(extraAttributes),
-             pairNumber, nullptr);
+    setcchar(&renderedCell, glyphBuffer, static_cast<attr_t>(extraAttributes), pairNumber,
+             nullptr);
     mvwadd_wch(targetWindow, rowIndex, columnIndex, &renderedCell);
 }
 
@@ -52,8 +52,8 @@ void Renderer::drawText(int columnIndex, int rowIndex, std::string_view text,
     int rowCount = 0;
     int columnCount = 0;
     getmaxyx(targetWindow, rowCount, columnCount);
-    if (columnIndex < 0 || rowIndex < 0 ||
-        columnIndex >= columnCount || rowIndex >= rowCount) {
+    if (columnIndex < 0 || rowIndex < 0 || columnIndex >= columnCount ||
+        rowIndex >= rowCount) {
         return;
     }
     const int colorAttribute = palette.attributeForColors(foreground, background);

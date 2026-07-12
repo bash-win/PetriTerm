@@ -27,9 +27,8 @@ public:
 
     /// Draws a single wide character at the given cell with optional color and
     /// attributes. Out-of-bounds coordinates are ignored, not clamped.
-    void drawGlyph(int columnIndex, int rowIndex, wchar_t glyph,
-                   TerminalColor foreground, TerminalColor background,
-                   int extraAttributes = 0);
+    void drawGlyph(int columnIndex, int rowIndex, wchar_t glyph, TerminalColor foreground,
+                   TerminalColor background, int extraAttributes = 0);
 
     /// Draws a left-aligned string starting at the given cell, truncated to the
     /// window width. Out-of-bounds start cells are ignored.

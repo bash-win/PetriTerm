@@ -10,15 +10,24 @@ namespace {
 /// Default sentinel so use_default_colors supplies the terminal's own default.
 short toNcursesColor(TerminalColor color) {
     switch (color) {
-        case TerminalColor::Default: return -1;
-        case TerminalColor::Black:   return COLOR_BLACK;
-        case TerminalColor::Red:     return COLOR_RED;
-        case TerminalColor::Green:   return COLOR_GREEN;
-        case TerminalColor::Yellow:  return COLOR_YELLOW;
-        case TerminalColor::Blue:    return COLOR_BLUE;
-        case TerminalColor::Magenta: return COLOR_MAGENTA;
-        case TerminalColor::Cyan:    return COLOR_CYAN;
-        case TerminalColor::White:   return COLOR_WHITE;
+        case TerminalColor::Default:
+            return -1;
+        case TerminalColor::Black:
+            return COLOR_BLACK;
+        case TerminalColor::Red:
+            return COLOR_RED;
+        case TerminalColor::Green:
+            return COLOR_GREEN;
+        case TerminalColor::Yellow:
+            return COLOR_YELLOW;
+        case TerminalColor::Blue:
+            return COLOR_BLUE;
+        case TerminalColor::Magenta:
+            return COLOR_MAGENTA;
+        case TerminalColor::Cyan:
+            return COLOR_CYAN;
+        case TerminalColor::White:
+            return COLOR_WHITE;
     }
     return -1;
 }
@@ -44,8 +53,8 @@ int ColorPalette::attributeForColors(TerminalColor foreground, TerminalColor bac
         }
         pairIndex = nextPairIndex;
         ++nextPairIndex;
-        init_pair(static_cast<short>(pairIndex),
-                  toNcursesColor(foreground), toNcursesColor(background));
+        init_pair(static_cast<short>(pairIndex), toNcursesColor(foreground),
+                  toNcursesColor(background));
         pairIndexByColorCombo[static_cast<std::size_t>(comboIndex)] = pairIndex;
     }
     return COLOR_PAIR(pairIndex);

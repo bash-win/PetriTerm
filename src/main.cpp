@@ -31,12 +31,12 @@ void drawWelcomeScreen(petriterm::engine::Renderer& renderer,
     renderer.beginFrame();
     renderer.drawBorderedBox(0, 0, dimensions.columns, dimensions.rows,
                              TerminalColor::Green);
-    renderer.drawText(centeredColumnFor(dimensions.columns, title), centerRow - 1,
-                      title, TerminalColor::Green, TerminalColor::Default, A_BOLD);
-    renderer.drawText(centeredColumnFor(dimensions.columns, subtitle), centerRow,
-                      subtitle, TerminalColor::Cyan);
-    renderer.drawText(centeredColumnFor(dimensions.columns, hint), centerRow + 2,
-                      hint, TerminalColor::Yellow);
+    renderer.drawText(centeredColumnFor(dimensions.columns, title), centerRow - 1, title,
+                      TerminalColor::Green, TerminalColor::Default, A_BOLD);
+    renderer.drawText(centeredColumnFor(dimensions.columns, subtitle), centerRow, subtitle,
+                      TerminalColor::Cyan);
+    renderer.drawText(centeredColumnFor(dimensions.columns, hint), centerRow + 2, hint,
+                      TerminalColor::Yellow);
     renderer.endFrame();
 }
 

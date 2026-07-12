@@ -14,6 +14,32 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: lint (clang-format + clang-tidy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build libncurses-dev clang-format clang-tidy
+
+      - name: Check formatting (clang-format)
+        run: |
+          files=$(find src include -name '*.cpp' -o -name '*.hpp')
+          clang-format --dry-run --Werror $files
+
+      - name: Configure (generate compile_commands.json)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Static analysis (clang-tidy)
+        run: |
+          files=$(find src -name '*.cpp')
+          clang-tidy -p build $files
+
   build-and-test:
     name: build & test (${{ matrix.compiler.name }})
     runs-on: ubuntu-latest

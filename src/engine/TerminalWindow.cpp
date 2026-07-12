@@ -59,8 +59,8 @@ bool TerminalWindow::waitUntilTerminalIsAtLeast(int minimumColumns, int minimumR
         }
         erase();
         mvprintw(0, 0, "Terminal too small.");
-        mvprintw(1, 0, "Need at least %d x %d; current size is %d x %d.",
-                 minimumColumns, minimumRows, dimensions.columns, dimensions.rows);
+        mvprintw(1, 0, "Need at least %d x %d; current size is %d x %d.", minimumColumns,
+                 minimumRows, dimensions.columns, dimensions.rows);
         mvprintw(2, 0, "Resize the terminal, or press q to quit.");
         refresh();
         const int keyCode = getch();
