@@ -58,22 +58,25 @@ public:
     /// The center cell itself is never visited.
     void forEachNeighbor(int columnIndex, int rowIndex, NeighborAdjacency adjacency,
                          const std::function<void(int, int)>& callback) const {
-        for (int rowOffset = -1; rowOffset <= 1; ++rowOffset) {
-            for (int columnOffset = -1; columnOffset <= 1; ++columnOffset) {
-                if (rowOffset == 0 && columnOffset == 0) {
-                    continue;
-                }
-                const bool isDiagonal = rowOffset != 0 && columnOffset != 0;
-                if (adjacency == NeighborAdjacency::FourWay && isDiagonal) {
-                    continue;
-                }
-                const int neighborColumn = columnIndex + columnOffset;
-                const int neighborRow = rowIndex + rowOffset;
-                if (containsCoordinate(neighborColumn, neighborRow)) {
-                    callback(neighborColumn, neighborRow);
-                }
+        const auto visitIfInBounds = [&](int neighborColumn, int neighborRow) {
+            if (containsCoordinate(neighborColumn, neighborRow)) {
+                callback(neighborColumn, neighborRow);
             }
+        };
+
+        visitIfInBounds(columnIndex, rowIndex - 1);
+        visitIfInBounds(columnIndex, rowIndex + 1);
+        visitIfInBounds(columnIndex - 1, rowIndex);
+        visitIfInBounds(columnIndex + 1, rowIndex);
+
+        if (adjacency == NeighborAdjacency::FourWay) {
+            return;
         }
+
+        visitIfInBounds(columnIndex - 1, rowIndex - 1);
+        visitIfInBounds(columnIndex + 1, rowIndex - 1);
+        visitIfInBounds(columnIndex - 1, rowIndex + 1);
+        visitIfInBounds(columnIndex + 1, rowIndex + 1);
     }
 
 private:
