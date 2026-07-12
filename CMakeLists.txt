@@ -17,6 +17,8 @@ find_library(PANELW_LIBRARY NAMES panelw REQUIRED)
 
 add_library(petriterm_core STATIC
     src/engine/TerminalWindow.cpp
+    src/engine/ColorPalette.cpp
+    src/engine/Renderer.cpp
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
