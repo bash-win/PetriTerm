@@ -14,9 +14,9 @@ namespace {
 
 using SecondsClock = std::chrono::steady_clock;
 
-/// Upper bound on simulation ticks processed in a single frame, preventing a
-/// slow tick from spiraling into an ever-growing backlog that starves
-/// rendering.
+/// Upper bound on simulation ticks processed in a single frame. Accumulated
+/// time beyond this many ticks is discarded, preventing a slow tick from
+/// spiraling into an ever-growing backlog that starves rendering.
 constexpr int kMaximumTicksPerFrame = 8;
 
 double secondsBetween(SecondsClock::time_point start, SecondsClock::time_point end) {
@@ -26,8 +26,8 @@ double secondsBetween(SecondsClock::time_point start, SecondsClock::time_point e
 }
 
 GameLoop::GameLoop(int targetRenderFramesPerSecond, double initialSimulationTicksPerSecond)
-    : targetRenderFramesPerSecond(targetRenderFramesPerSecond),
-      simulationTicksPerSecond(initialSimulationTicksPerSecond) {}
+    : targetRenderFramesPerSecond(std::max(1, targetRenderFramesPerSecond)),
+      simulationTicksPerSecond(std::max(0.0, initialSimulationTicksPerSecond)) {}
 
 void GameLoop::setSimulationTicksPerSecond(double ticksPerSecond) {
     simulationTicksPerSecond = std::max(0.0, ticksPerSecond);
@@ -55,16 +55,11 @@ void GameLoop::runUntilExitRequested(SceneManager& sceneManager, InputManager& i
 
         if (simulationTicksPerSecond > 0.0) {
             const double tickDurationSeconds = 1.0 / simulationTicksPerSecond;
-            accumulatedSeconds += elapsedSeconds;
-            int ticksThisFrame = 0;
-            while (accumulatedSeconds >= tickDurationSeconds &&
-                   ticksThisFrame < kMaximumTicksPerFrame) {
+            accumulatedSeconds = std::min(accumulatedSeconds + elapsedSeconds,
+                                          tickDurationSeconds * kMaximumTicksPerFrame);
+            while (accumulatedSeconds >= tickDurationSeconds) {
                 sceneManager.updateActiveScene(tickDurationSeconds);
                 accumulatedSeconds -= tickDurationSeconds;
-                ++ticksThisFrame;
-            }
-            if (accumulatedSeconds > tickDurationSeconds * kMaximumTicksPerFrame) {
-                accumulatedSeconds = 0.0;
             }
         } else {
             accumulatedSeconds = 0.0;

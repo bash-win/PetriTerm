@@ -28,7 +28,8 @@ public:
     /// if the standard streams are not attached to a terminal.
     TerminalWindow();
 
-    /// Restores the terminal to its pre-curses state exactly once.
+    /// Restores the terminal to its pre-curses state exactly once and returns
+    /// SIGINT/SIGTERM to their default handlers.
     ~TerminalWindow();
 
     TerminalWindow(const TerminalWindow&) = delete;

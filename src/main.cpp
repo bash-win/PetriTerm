@@ -19,9 +19,13 @@ namespace {
 
 using namespace petriterm::engine;
 
+constexpr int kMinimumTerminalColumns = 80;
+constexpr int kMinimumTerminalRows = 24;
+
 /// Bootstrap scene that moves an '@' with the arrow keys, proving the game
-/// loop, input, and renderer integrate. Replaced by the real menu and
-/// simulation screens in a later milestone.
+/// loop, input, and renderer integrate. Movement is clamped to the minimum
+/// terminal region guaranteed visible at startup. Replaced by the real menu
+/// and simulation screens in a later milestone.
 class ArrowKeyDemoScene : public Scene {
 public:
     void update(double) override {}
@@ -41,13 +45,13 @@ public:
                 glyphRow = std::max(glyphRow - 1, 0);
                 break;
             case KeyCode::ArrowDown:
-                ++glyphRow;
+                glyphRow = std::min(glyphRow + 1, kMinimumTerminalRows - 1);
                 break;
             case KeyCode::ArrowLeft:
                 glyphColumn = std::max(glyphColumn - 1, 0);
                 break;
             case KeyCode::ArrowRight:
-                ++glyphColumn;
+                glyphColumn = std::min(glyphColumn + 1, kMinimumTerminalColumns - 1);
                 break;
             case KeyCode::Escape:
                 return SceneTransition::exitApplication();
@@ -73,7 +77,8 @@ int main() {
     std::setlocale(LC_ALL, "");
     try {
         petriterm::engine::TerminalWindow terminal;
-        if (!terminal.waitUntilTerminalIsAtLeast(80, 24)) {
+        if (!terminal.waitUntilTerminalIsAtLeast(kMinimumTerminalColumns,
+                                                 kMinimumTerminalRows)) {
             return 0;
         }
         petriterm::engine::ColorPalette palette;

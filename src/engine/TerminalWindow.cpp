@@ -39,6 +39,8 @@ TerminalWindow::TerminalWindow() {
 
 TerminalWindow::~TerminalWindow() {
     if (ncursesActive) {
+        std::signal(SIGINT, SIG_DFL);
+        std::signal(SIGTERM, SIG_DFL);
         endwin();
         ncursesActive = false;
     }
