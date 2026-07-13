@@ -1,44 +1,75 @@
+#include <algorithm>
 #include <clocale>
 #include <cstdio>
-#include <cstring>
 #include <exception>
+#include <memory>
 #include <string_view>
 
 #include <ncurses.h>
 
 #include "petriterm/engine/ColorPalette.hpp"
+#include "petriterm/engine/GameLoop.hpp"
+#include "petriterm/engine/InputManager.hpp"
 #include "petriterm/engine/Renderer.hpp"
+#include "petriterm/engine/Scene.hpp"
+#include "petriterm/engine/SceneManager.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 
 namespace {
 
-/// Returns the leftmost column that centers a string of the given length within
-/// the given total width.
-int centeredColumnFor(int totalWidth, std::string_view text) {
-    return (totalWidth - static_cast<int>(text.size())) / 2;
-}
+using namespace petriterm::engine;
 
-/// Draws the PetriTerm welcome screen: a bordered frame with a centered title,
-/// subtitle, and quit hint. Rebuilt each frame so terminal resizes recenter it.
-void drawWelcomeScreen(petriterm::engine::Renderer& renderer,
-                       const petriterm::engine::TerminalDimensions& dimensions) {
-    using petriterm::engine::TerminalColor;
-    constexpr std::string_view title = "PetriTerm";
-    constexpr std::string_view subtitle = "Terminal Ecology Simulator";
-    constexpr std::string_view hint = "press q to quit";
-    const int centerRow = dimensions.rows / 2;
+constexpr int kMinimumTerminalColumns = 80;
+constexpr int kMinimumTerminalRows = 24;
 
-    renderer.beginFrame();
-    renderer.drawBorderedBox(0, 0, dimensions.columns, dimensions.rows,
-                             TerminalColor::Green);
-    renderer.drawText(centeredColumnFor(dimensions.columns, title), centerRow - 1, title,
-                      TerminalColor::Green, TerminalColor::Default, A_BOLD);
-    renderer.drawText(centeredColumnFor(dimensions.columns, subtitle), centerRow, subtitle,
-                      TerminalColor::Cyan);
-    renderer.drawText(centeredColumnFor(dimensions.columns, hint), centerRow + 2, hint,
-                      TerminalColor::Yellow);
-    renderer.endFrame();
-}
+/// Bootstrap scene that moves an '@' with the arrow keys, proving the game
+/// loop, input, and renderer integrate. Movement is clamped to the minimum
+/// terminal region guaranteed visible at startup. Replaced by the real menu
+/// and simulation screens in a later milestone.
+class ArrowKeyDemoScene : public Scene {
+public:
+    void update(double) override {}
+
+    void render(Renderer& renderer) override {
+        constexpr std::string_view hint = "arrows: move the @    q / Esc: quit";
+        renderer.beginFrame();
+        renderer.drawText(2, 1, hint, TerminalColor::Cyan);
+        renderer.drawGlyph(glyphColumn, glyphRow, L'@', TerminalColor::Yellow,
+                           TerminalColor::Default, A_BOLD);
+        renderer.endFrame();
+    }
+
+    SceneTransition handleKeyEvent(const KeyEvent& event) override {
+        switch (event.code) {
+            case KeyCode::ArrowUp:
+                glyphRow = std::max(glyphRow - 1, 0);
+                break;
+            case KeyCode::ArrowDown:
+                glyphRow = std::min(glyphRow + 1, kMinimumTerminalRows - 1);
+                break;
+            case KeyCode::ArrowLeft:
+                glyphColumn = std::max(glyphColumn - 1, 0);
+                break;
+            case KeyCode::ArrowRight:
+                glyphColumn = std::min(glyphColumn + 1, kMinimumTerminalColumns - 1);
+                break;
+            case KeyCode::Escape:
+                return SceneTransition::exitApplication();
+            case KeyCode::Character:
+                if (event.character == L'q' || event.character == L'Q') {
+                    return SceneTransition::exitApplication();
+                }
+                break;
+            default:
+                break;
+        }
+        return SceneTransition::stay();
+    }
+
+private:
+    int glyphColumn = 10;
+    int glyphRow = 5;
+};
 
 }
 
@@ -46,21 +77,18 @@ int main() {
     std::setlocale(LC_ALL, "");
     try {
         petriterm::engine::TerminalWindow terminal;
-        if (!terminal.waitUntilTerminalIsAtLeast(80, 24)) {
+        if (!terminal.waitUntilTerminalIsAtLeast(kMinimumTerminalColumns,
+                                                 kMinimumTerminalRows)) {
             return 0;
         }
         petriterm::engine::ColorPalette palette;
         palette.initializeColorPairs();
         petriterm::engine::Renderer renderer(stdscr, palette);
-
-        bool quitRequested = false;
-        while (!quitRequested) {
-            drawWelcomeScreen(renderer, terminal.currentDimensions());
-            const int keyCode = getch();
-            if (keyCode == 'q' || keyCode == 'Q') {
-                quitRequested = true;
-            }
-        }
+        petriterm::engine::InputManager inputManager;
+        petriterm::engine::SceneManager sceneManager;
+        sceneManager.pushScene(std::make_unique<ArrowKeyDemoScene>());
+        petriterm::engine::GameLoop gameLoop(60, 30.0);
+        gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "PetriTerm fatal error: %s\n", error.what());
         return 1;

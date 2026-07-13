@@ -51,10 +51,9 @@ InputManager::InputManager() {
 
 void InputManager::pollPendingKeyEvents() {
     wint_t keyValue = 0;
-    int readStatus = get_wch(&keyValue);
-    while (readStatus != ERR) {
+    int readStatus = 0;
+    while ((readStatus = get_wch(&keyValue)) != ERR) {
         queuedEvents.push_back(decodeKeyEvent(readStatus, keyValue));
-        readStatus = get_wch(&keyValue);
     }
 }
 

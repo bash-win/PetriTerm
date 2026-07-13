@@ -49,17 +49,13 @@ void Renderer::drawGlyph(int columnIndex, int rowIndex, wchar_t glyph,
 void Renderer::drawText(int columnIndex, int rowIndex, std::string_view text,
                         TerminalColor foreground, TerminalColor background,
                         int extraAttributes) {
-    int rowCount = 0;
-    int columnCount = 0;
-    getmaxyx(targetWindow, rowCount, columnCount);
-    if (columnIndex < 0 || rowIndex < 0 || columnIndex >= columnCount ||
-        rowIndex >= rowCount) {
+    if (!isWithinWindow(targetWindow, columnIndex, rowIndex)) {
         return;
     }
     const int colorAttribute = palette.attributeForColors(foreground, background);
     const short pairNumber = static_cast<short>(PAIR_NUMBER(colorAttribute));
     wattr_set(targetWindow, static_cast<attr_t>(extraAttributes), pairNumber, nullptr);
-    const int availableWidth = columnCount - columnIndex;
+    const int availableWidth = getmaxx(targetWindow) - columnIndex;
     const int drawLength = std::min(static_cast<int>(text.size()), availableWidth);
     mvwaddnstr(targetWindow, rowIndex, columnIndex, text.data(), drawLength);
 }
