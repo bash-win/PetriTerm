@@ -25,6 +25,8 @@ add_library(petriterm_core STATIC
     src/engine/SceneManager.cpp
     src/engine/GameLoop.cpp
     src/world/NoiseGenerator.cpp
+    src/world/Biome.cpp
+    src/world/WorldGrid.cpp
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
