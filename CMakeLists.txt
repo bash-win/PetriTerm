@@ -28,6 +28,7 @@ add_library(petriterm_core STATIC
     src/world/Biome.cpp
     src/world/WorldGrid.cpp
     src/world/WorldGenerator.cpp
+    src/game/Viewport.cpp
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

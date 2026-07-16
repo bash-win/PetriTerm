@@ -1,9 +1,9 @@
-#include <algorithm>
 #include <clocale>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
-#include <memory>
 #include <string_view>
+#include <utility>
 
 #include <ncurses.h>
 
@@ -14,44 +14,76 @@
 #include "petriterm/engine/Scene.hpp"
 #include "petriterm/engine/SceneManager.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
+#include "petriterm/game/Viewport.hpp"
+#include "petriterm/world/Biome.hpp"
+#include "petriterm/world/WorldGenerator.hpp"
+#include "petriterm/world/WorldGrid.hpp"
 
 namespace {
 
 using namespace petriterm::engine;
+using petriterm::game::ScreenCell;
+using petriterm::game::Viewport;
+using petriterm::world::BiomeDescriptor;
+using petriterm::world::describeBiome;
+using petriterm::world::generateWorld;
+using petriterm::world::Tile;
+using petriterm::world::WorldGrid;
 
 constexpr int kMinimumTerminalColumns = 80;
 constexpr int kMinimumTerminalRows = 24;
+constexpr std::uint64_t kBootstrapWorldSeed = 42;
 
-/// Bootstrap scene that moves an '@' with the arrow keys, proving the game
-/// loop, input, and renderer integrate. Movement is clamped to the minimum
-/// terminal region guaranteed visible at startup. Replaced by the real menu
-/// and simulation screens in a later milestone.
-class ArrowKeyDemoScene : public Scene {
+/// Bootstrap scene that renders a generated world and lets the arrow keys scroll
+/// the camera across it, proving world generation and the viewport integrate.
+/// Replaced by the real simulation screen in a later milestone.
+class WorldViewScene : public Scene {
 public:
+    WorldViewScene(WorldGrid generatedWorld, int screenColumns, int screenRows)
+        : world(std::move(generatedWorld)),
+          helpBarRow(screenRows - 1),
+          viewport(world.widthInTiles(), world.heightInTiles(), 0, 0, screenColumns,
+                   screenRows - 1) {}
+
     void update(double) override {}
 
     void render(Renderer& renderer) override {
-        constexpr std::string_view hint = "arrows: move the @    q / Esc: quit";
+        constexpr std::string_view hint = "arrows: scroll    q / Esc: quit    (seed 42)";
         renderer.beginFrame();
-        renderer.drawText(2, 1, hint, TerminalColor::Cyan);
-        renderer.drawGlyph(glyphColumn, glyphRow, L'@', TerminalColor::Yellow,
-                           TerminalColor::Default, A_BOLD);
+        for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
+            for (int columnOffset = 0; columnOffset < viewport.visibleWidthInTiles();
+                 ++columnOffset) {
+                const int tileColumn = viewport.cameraColumnIndex() + columnOffset;
+                const int tileRow = viewport.cameraRowIndex() + rowOffset;
+                const std::optional<ScreenCell> cell =
+                    viewport.tileToScreenCell(tileColumn, tileRow);
+                if (!cell) {
+                    continue;
+                }
+                const Tile& tile = world.tileAt(tileColumn, tileRow);
+                const BiomeDescriptor& descriptor = describeBiome(tile.biome);
+                renderer.drawGlyph(cell->columnIndex, cell->rowIndex,
+                                   descriptor.backgroundGlyph, TerminalColor::Black,
+                                   descriptor.backgroundColor);
+            }
+        }
+        renderer.drawText(0, helpBarRow, hint, TerminalColor::Cyan);
         renderer.endFrame();
     }
 
     SceneTransition handleKeyEvent(const KeyEvent& event) override {
         switch (event.code) {
             case KeyCode::ArrowUp:
-                glyphRow = std::max(glyphRow - 1, 0);
+                viewport.scrollByTiles(0, -1);
                 break;
             case KeyCode::ArrowDown:
-                glyphRow = std::min(glyphRow + 1, kMinimumTerminalRows - 1);
+                viewport.scrollByTiles(0, 1);
                 break;
             case KeyCode::ArrowLeft:
-                glyphColumn = std::max(glyphColumn - 1, 0);
+                viewport.scrollByTiles(-1, 0);
                 break;
             case KeyCode::ArrowRight:
-                glyphColumn = std::min(glyphColumn + 1, kMinimumTerminalColumns - 1);
+                viewport.scrollByTiles(1, 0);
                 break;
             case KeyCode::Escape:
                 return SceneTransition::exitApplication();
@@ -67,8 +99,9 @@ public:
     }
 
 private:
-    int glyphColumn = 10;
-    int glyphRow = 5;
+    WorldGrid world;
+    int helpBarRow;
+    Viewport viewport;
 };
 
 }
@@ -86,8 +119,15 @@ int main() {
         petriterm::engine::Renderer renderer(stdscr, palette);
         petriterm::engine::InputManager inputManager;
         petriterm::engine::SceneManager sceneManager;
-        sceneManager.pushScene(std::make_unique<ArrowKeyDemoScene>());
-        petriterm::engine::GameLoop gameLoop(60, 30.0);
+
+        const auto dimensions = terminal.currentDimensions();
+        WorldGrid world = generateWorld(petriterm::world::kDefaultWorldWidthInTiles,
+                                        petriterm::world::kDefaultWorldHeightInTiles,
+                                        kBootstrapWorldSeed);
+        sceneManager.pushScene(std::make_unique<WorldViewScene>(
+            std::move(world), dimensions.columns, dimensions.rows));
+
+        petriterm::engine::GameLoop gameLoop(60, 0.0);
         gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "PetriTerm fatal error: %s\n", error.what());
