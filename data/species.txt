@@ -1,0 +1,40 @@
+# PetriTerm species definitions.
+# One species per line. Blank lines and lines beginning with '#' are ignored.
+# Fields are key=value pairs separated by ';', in any order. All keys are required
+# (diet may be empty). Units are named in the key where ambiguous.
+#
+# keys: id;name;category;glyph;color;cost;idealTemp;tempTol;idealHumidity;humidityTol;
+#       energyGain;energyPerTick;energyToReproduce;reproCost;reproCooldown;maxAge;
+#       moveRange;seedProb;diet
+#
+# category: Plant | Herbivore | Carnivore | Omnivore | Decomposer
+# color:    Black | Red | Green | Yellow | Blue | Magenta | Cyan | White
+# diet:     comma-separated categories this species eats (empty for Plant/Decomposer)
+
+# --- Plants (sessile producers, one pair per biome) ---
+id=jungle_fern;name=Jungle Fern;category=Plant;glyph=♣;color=Green;cost=2;idealTemp=27;tempTol=8;idealHumidity=82;humidityTol=20;energyGain=4;energyPerTick=1;energyToReproduce=12;reproCost=6;reproCooldown=5;maxAge=200;moveRange=0;seedProb=0.15;diet=
+id=jungle_palm;name=Jungle Palm;category=Plant;glyph=♠;color=Green;cost=3;idealTemp=28;tempTol=7;idealHumidity=85;humidityTol=18;energyGain=5;energyPerTick=1;energyToReproduce=14;reproCost=7;reproCooldown=6;maxAge=220;moveRange=0;seedProb=0.12;diet=
+id=desert_cactus;name=Barrel Cactus;category=Plant;glyph=‡;color=Yellow;cost=2;idealTemp=34;tempTol=10;idealHumidity=15;humidityTol=15;energyGain=3;energyPerTick=1;energyToReproduce=12;reproCost=6;reproCooldown=7;maxAge=220;moveRange=0;seedProb=0.10;diet=
+id=desert_aloe;name=Desert Aloe;category=Plant;glyph=†;color=Yellow;cost=2;idealTemp=32;tempTol=9;idealHumidity=20;humidityTol=15;energyGain=3;energyPerTick=1;energyToReproduce=12;reproCost=6;reproCooldown=7;maxAge=200;moveRange=0;seedProb=0.10;diet=
+id=grass_meadow;name=Meadow Grass;category=Plant;glyph=";color=Green;cost=1;idealTemp=20;tempTol=12;idealHumidity=50;humidityTol=30;energyGain=4;energyPerTick=1;energyToReproduce=10;reproCost=5;reproCooldown=4;maxAge=160;moveRange=0;seedProb=0.20;diet=
+id=grass_clover;name=Wild Clover;category=Plant;glyph=%;color=Green;cost=2;idealTemp=19;tempTol=12;idealHumidity=55;humidityTol=28;energyGain=4;energyPerTick=1;energyToReproduce=11;reproCost=5;reproCooldown=5;maxAge=150;moveRange=0;seedProb=0.18;diet=
+id=wetland_reed;name=Marsh Reed;category=Plant;glyph=|;color=Cyan;cost=2;idealTemp=18;tempTol=8;idealHumidity=88;humidityTol=18;energyGain=4;energyPerTick=1;energyToReproduce=12;reproCost=6;reproCooldown=5;maxAge=180;moveRange=0;seedProb=0.16;diet=
+id=wetland_moss;name=Bog Moss;category=Plant;glyph=∴;color=Cyan;cost=2;idealTemp=16;tempTol=8;idealHumidity=90;humidityTol=15;energyGain=3;energyPerTick=1;energyToReproduce=10;reproCost=5;reproCooldown=5;maxAge=170;moveRange=0;seedProb=0.16;diet=
+id=tundra_lichen;name=Rock Lichen;category=Plant;glyph=,;color=White;cost=2;idealTemp=-2;tempTol=12;idealHumidity=40;humidityTol=30;energyGain=3;energyPerTick=1;energyToReproduce=10;reproCost=5;reproCooldown=6;maxAge=160;moveRange=0;seedProb=0.12;diet=
+id=tundra_sedge;name=Snow Sedge;category=Plant;glyph=v;color=White;cost=2;idealTemp=0;tempTol=12;idealHumidity=45;humidityTol=28;energyGain=3;energyPerTick=1;energyToReproduce=11;reproCost=5;reproCooldown=6;maxAge=150;moveRange=0;seedProb=0.12;diet=
+
+# --- Herbivores ---
+id=rabbit;name=Grass Rabbit;category=Herbivore;glyph=r;color=Yellow;cost=5;idealTemp=18;tempTol=14;idealHumidity=55;humidityTol=35;energyGain=8;energyPerTick=2;energyToReproduce=20;reproCost=10;reproCooldown=8;maxAge=120;moveRange=2;seedProb=0;diet=Plant
+id=deer;name=Woodland Deer;category=Herbivore;glyph=d;color=Yellow;cost=6;idealTemp=15;tempTol=15;idealHumidity=60;humidityTol=35;energyGain=9;energyPerTick=2;energyToReproduce=24;reproCost=12;reproCooldown=10;maxAge=140;moveRange=2;seedProb=0;diet=Plant
+id=tortoise;name=Desert Tortoise;category=Herbivore;glyph=o;color=Green;cost=5;idealTemp=30;tempTol=12;idealHumidity=25;humidityTol=30;energyGain=8;energyPerTick=1;energyToReproduce=22;reproCost=11;reproCooldown=12;maxAge=180;moveRange=1;seedProb=0;diet=Plant
+
+# --- Carnivores ---
+id=fox;name=Red Fox;category=Carnivore;glyph=F;color=Red;cost=9;idealTemp=15;tempTol=16;idealHumidity=50;humidityTol=40;energyGain=16;energyPerTick=3;energyToReproduce=30;reproCost=15;reproCooldown=14;maxAge=140;moveRange=3;seedProb=0;diet=Herbivore,Omnivore
+id=wolf;name=Gray Wolf;category=Carnivore;glyph=W;color=Red;cost=10;idealTemp=8;tempTol=18;idealHumidity=45;humidityTol=40;energyGain=18;energyPerTick=3;energyToReproduce=34;reproCost=17;reproCooldown=16;maxAge=150;moveRange=3;seedProb=0;diet=Herbivore,Omnivore
+
+# --- Omnivore ---
+id=boar;name=Wild Boar;category=Omnivore;glyph=b;color=Magenta;cost=7;idealTemp=18;tempTol=15;idealHumidity=55;humidityTol=35;energyGain=10;energyPerTick=2;energyToReproduce=22;reproCost=11;reproCooldown=10;maxAge=130;moveRange=2;seedProb=0;diet=Plant,Herbivore
+
+# --- Decomposers (close the nutrient loop) ---
+id=beetle;name=Soil Beetle;category=Decomposer;glyph=x;color=White;cost=3;idealTemp=20;tempTol=20;idealHumidity=60;humidityTol=40;energyGain=5;energyPerTick=1;energyToReproduce=10;reproCost=5;reproCooldown=6;maxAge=90;moveRange=1;seedProb=0;diet=
+id=earthworm;name=Earthworm;category=Decomposer;glyph=~;color=White;cost=3;idealTemp=18;tempTol=18;idealHumidity=70;humidityTol=35;energyGain=5;energyPerTick=1;energyToReproduce=10;reproCost=5;reproCooldown=6;maxAge=90;moveRange=1;seedProb=0;diet=

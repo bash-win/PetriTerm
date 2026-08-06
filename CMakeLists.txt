@@ -31,6 +31,7 @@ add_library(petriterm_core STATIC
     src/world/ClimateSystem.cpp
     src/organisms/OrganismCategory.cpp
     src/organisms/Species.cpp
+    src/organisms/SpeciesRegistry.cpp
     src/game/Viewport.cpp
 )
 target_include_directories(petriterm_core PUBLIC
@@ -71,6 +72,8 @@ if(PETRITERM_TEST_SOURCES)
     endif()
     add_executable(petriterm_tests ${PETRITERM_TEST_SOURCES})
     target_link_libraries(petriterm_tests PRIVATE petriterm_core Catch2::Catch2WithMain)
+    target_compile_definitions(petriterm_tests PRIVATE
+        PETRITERM_SPECIES_FILE_PATH="${PETRITERM_SPECIES_FILE}")
     enable_testing()
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
     include(Catch)
