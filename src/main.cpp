@@ -2,10 +2,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 #include <ncurses.h>
 
@@ -18,6 +21,9 @@
 #include "petriterm/engine/SceneManager.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 #include "petriterm/game/Viewport.hpp"
+#include "petriterm/organisms/Organism.hpp"
+#include "petriterm/organisms/Species.hpp"
+#include "petriterm/organisms/SpeciesRegistry.hpp"
 #include "petriterm/world/Biome.hpp"
 #include "petriterm/world/ClimateSystem.hpp"
 #include "petriterm/world/WorldGenerator.hpp"
@@ -28,6 +34,10 @@ namespace {
 using namespace petriterm::engine;
 using petriterm::game::ScreenCell;
 using petriterm::game::Viewport;
+using petriterm::organisms::Organism;
+using petriterm::organisms::OrganismCategory;
+using petriterm::organisms::Species;
+using petriterm::organisms::SpeciesRegistry;
 using petriterm::world::BiomeDescriptor;
 using petriterm::world::ClimateSystem;
 using petriterm::world::describeBiome;
@@ -40,20 +50,76 @@ using petriterm::world::WorldGrid;
 constexpr int kMinimumTerminalColumns = 80;
 constexpr int kMinimumTerminalRows = 24;
 constexpr std::uint64_t kBootstrapWorldSeed = 42;
+constexpr int kTilesPerScatteredOrganism = 12;
 
-/// Bootstrap scene that renders a generated world, advances the climate each
-/// tick, and reports live weather in a minimal HUD; the arrow keys scroll the
-/// camera. Proves world generation, the climate system, and the viewport
-/// integrate. Replaced by the real simulation screen in a later milestone.
+/// Returns a drawing priority so the highest trophic level present on a tile is
+/// the one shown: carnivore > omnivore > herbivore > plant > decomposer.
+int trophicDrawPriority(OrganismCategory category) {
+    switch (category) {
+        case OrganismCategory::Carnivore:
+            return 4;
+        case OrganismCategory::Omnivore:
+            return 3;
+        case OrganismCategory::Herbivore:
+            return 2;
+        case OrganismCategory::Plant:
+            return 1;
+        case OrganismCategory::Decomposer:
+            return 0;
+    }
+    return 0;
+}
+
+/// Returns the living organism on the tile with the highest trophic draw
+/// priority, or nullptr if the tile has no living organisms.
+const Organism* dominantLivingOrganism(const Tile& tile) {
+    const Organism* dominant = nullptr;
+    int highestPriority = -1;
+    for (const auto& organism : tile.occupyingOrganisms) {
+        if (!organism->isAlive) {
+            continue;
+        }
+        const int priority = trophicDrawPriority(organism->species->category);
+        if (priority > highestPriority) {
+            highestPriority = priority;
+            dominant = organism.get();
+        }
+    }
+    return dominant;
+}
+
+/// Locates the species data file next to the executable, falling back to the
+/// current directory.
+std::filesystem::path locateSpeciesFile() {
+    std::error_code errorCode;
+    const std::filesystem::path executablePath =
+        std::filesystem::read_symlink("/proc/self/exe", errorCode);
+    if (!errorCode) {
+        const std::filesystem::path candidate =
+            executablePath.parent_path() / "species.txt";
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return "species.txt";
+}
+
+/// Bootstrap scene that renders a generated world with scattered organisms and
+/// live weather; the arrow keys scroll the camera. Proves world generation, the
+/// species registry, organism rendering, and the climate system integrate.
+/// Replaced by the real simulation screen in a later milestone.
 class WorldViewScene : public Scene {
 public:
-    WorldViewScene(WorldGrid generatedWorld, int screenColumns, int screenRows)
+    WorldViewScene(WorldGrid generatedWorld, const SpeciesRegistry& registry,
+                   int screenColumns, int screenRows)
         : world(std::move(generatedWorld)),
-          climateRandom(kBootstrapWorldSeed),
-          climate(climateRandom),
+          sceneRandom(kBootstrapWorldSeed),
+          climate(sceneRandom),
           helpBarRow(screenRows - 1),
           viewport(world.widthInTiles(), world.heightInTiles(), 0, 0, screenColumns,
-                   screenRows - 1) {}
+                   screenRows - 1) {
+        scatterInitialOrganisms(registry);
+    }
 
     void update(double) override { climate.advanceWeatherAndApplyToWorld(world); }
 
@@ -70,11 +136,7 @@ public:
                 if (!cell) {
                     continue;
                 }
-                const Tile& tile = world.tileAt(tileColumn, tileRow);
-                const BiomeDescriptor& descriptor = describeBiome(tile.biome);
-                renderer.drawGlyph(cell->columnIndex, cell->rowIndex,
-                                   descriptor.backgroundGlyph, TerminalColor::Black,
-                                   descriptor.backgroundColor);
+                drawTile(renderer, *cell, world.tileAt(tileColumn, tileRow));
             }
         }
         drawClimateHud(renderer);
@@ -110,6 +172,40 @@ public:
     }
 
 private:
+    /// Scatters organisms across the world for the render demonstration, honoring
+    /// each tile's per-category capacity. Real cursor placement arrives later.
+    void scatterInitialOrganisms(const SpeciesRegistry& registry) {
+        const std::vector<const Species*> allSpecies = registry.allSpecies();
+        if (allSpecies.empty()) {
+            return;
+        }
+        const int placementCount =
+            world.widthInTiles() * world.heightInTiles() / kTilesPerScatteredOrganism;
+        for (int placement = 0; placement < placementCount; ++placement) {
+            const int column = sceneRandom.integerInRange(0, world.widthInTiles() - 1);
+            const int row = sceneRandom.integerInRange(0, world.heightInTiles() - 1);
+            const Species* species = sceneRandom.pickUniformly(allSpecies);
+            Tile& tile = world.tileAt(column, row);
+            if (tile.hasCapacityForCategory(species->category)) {
+                tile.occupyingOrganisms.push_back(
+                    std::make_unique<Organism>(species, column, row));
+            }
+        }
+    }
+
+    /// Draws one tile: the dominant organism as a bold glyph in its species color
+    /// on a neutral cell, or the biome glyph on the biome's background color.
+    static void drawTile(Renderer& renderer, const ScreenCell& cell, const Tile& tile) {
+        if (const Organism* dominant = dominantLivingOrganism(tile)) {
+            renderer.drawGlyph(cell.columnIndex, cell.rowIndex, dominant->species->glyph,
+                               dominant->species->glyphColor, TerminalColor::Black, A_BOLD);
+            return;
+        }
+        const BiomeDescriptor& descriptor = describeBiome(tile.biome);
+        renderer.drawGlyph(cell.columnIndex, cell.rowIndex, descriptor.backgroundGlyph,
+                           TerminalColor::Black, descriptor.backgroundColor);
+    }
+
     /// Draws the minimal weather/season HUD, including the live climate at the
     /// tile in the center of the visible area.
     void drawClimateHud(Renderer& renderer) const {
@@ -133,7 +229,7 @@ private:
     }
 
     WorldGrid world;
-    RandomNumberGenerator climateRandom;
+    RandomNumberGenerator sceneRandom;
     ClimateSystem climate;
     int helpBarRow;
     Viewport viewport;
@@ -144,6 +240,9 @@ private:
 int main() {
     std::setlocale(LC_ALL, "");
     try {
+        SpeciesRegistry speciesRegistry;
+        speciesRegistry.loadFromFile(locateSpeciesFile());
+
         petriterm::engine::TerminalWindow terminal;
         if (!terminal.waitUntilTerminalIsAtLeast(kMinimumTerminalColumns,
                                                  kMinimumTerminalRows)) {
@@ -160,7 +259,7 @@ int main() {
                                         petriterm::world::kDefaultWorldHeightInTiles,
                                         kBootstrapWorldSeed);
         sceneManager.pushScene(std::make_unique<WorldViewScene>(
-            std::move(world), dimensions.columns, dimensions.rows));
+            std::move(world), speciesRegistry, dimensions.columns, dimensions.rows));
 
         petriterm::engine::GameLoop gameLoop(60, 30.0);
         gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer);
