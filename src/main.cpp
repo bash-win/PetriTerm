@@ -20,6 +20,7 @@
 #include "petriterm/engine/Scene.hpp"
 #include "petriterm/engine/SceneManager.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
+#include "petriterm/game/PlacementController.hpp"
 #include "petriterm/game/Viewport.hpp"
 #include "petriterm/organisms/Organism.hpp"
 #include "petriterm/organisms/Species.hpp"
@@ -32,6 +33,7 @@
 namespace {
 
 using namespace petriterm::engine;
+using petriterm::game::PlacementController;
 using petriterm::game::ScreenCell;
 using petriterm::game::Viewport;
 using petriterm::organisms::Organism;
@@ -50,7 +52,7 @@ using petriterm::world::WorldGrid;
 constexpr int kMinimumTerminalColumns = 80;
 constexpr int kMinimumTerminalRows = 24;
 constexpr std::uint64_t kBootstrapWorldSeed = 42;
-constexpr int kTilesPerScatteredOrganism = 12;
+constexpr int kStartingEcoCredits = 50;
 
 /// Returns a drawing priority so the highest trophic level present on a tile is
 /// the one shown: carnivore > omnivore > herbivore > plant > decomposer.
@@ -104,10 +106,11 @@ std::filesystem::path locateSpeciesFile() {
     return "species.txt";
 }
 
-/// Bootstrap scene that renders a generated world with scattered organisms and
-/// live weather; the arrow keys scroll the camera. Proves world generation, the
-/// species registry, organism rendering, and the climate system integrate.
-/// Replaced by the real simulation screen in a later milestone.
+/// Bootstrap scene for placing organisms: a cursor moves over the generated
+/// world (the camera follows), Tab cycles the species palette, and Enter/Space
+/// places the selected species for its eco-credit cost. Live weather runs in the
+/// HUD. Proves placement and the eco-credit economy integrate. Replaced by the
+/// real simulation screen in a later milestone.
 class WorldViewScene : public Scene {
 public:
     WorldViewScene(WorldGrid generatedWorld, const SpeciesRegistry& registry,
@@ -115,16 +118,17 @@ public:
         : world(std::move(generatedWorld)),
           sceneRandom(kBootstrapWorldSeed),
           climate(sceneRandom),
+          placement(world.widthInTiles(), world.heightInTiles(), registry.allSpecies()),
+          ecoCreditBalance(kStartingEcoCredits),
           helpBarRow(screenRows - 1),
           viewport(world.widthInTiles(), world.heightInTiles(), 0, 0, screenColumns,
-                   screenRows - 1) {
-        scatterInitialOrganisms(registry);
-    }
+                   screenRows - 1) {}
 
     void update(double) override { climate.advanceWeatherAndApplyToWorld(world); }
 
     void render(Renderer& renderer) override {
-        constexpr std::string_view hint = "arrows: scroll    q / Esc: quit    (seed 42)";
+        constexpr std::string_view hint =
+            "arrows: cursor   tab: species   enter/space: place   q: quit";
         renderer.beginFrame();
         for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
             for (int columnOffset = 0; columnOffset < viewport.visibleWidthInTiles();
@@ -136,10 +140,13 @@ public:
                 if (!cell) {
                     continue;
                 }
-                drawTile(renderer, *cell, world.tileAt(tileColumn, tileRow));
+                const bool isCursorTile = tileColumn == placement.cursorColumnIndex() &&
+                                          tileRow == placement.cursorRowIndex();
+                drawTile(renderer, *cell, world.tileAt(tileColumn, tileRow),
+                         isCursorTile ? A_REVERSE : 0);
             }
         }
-        drawClimateHud(renderer);
+        drawHud(renderer);
         renderer.drawText(0, helpBarRow, hint, TerminalColor::Cyan);
         renderer.endFrame();
     }
@@ -147,21 +154,27 @@ public:
     SceneTransition handleKeyEvent(const KeyEvent& event) override {
         switch (event.code) {
             case KeyCode::ArrowUp:
-                viewport.scrollByTiles(0, -1);
+                moveCursor(0, -1);
                 break;
             case KeyCode::ArrowDown:
-                viewport.scrollByTiles(0, 1);
+                moveCursor(0, 1);
                 break;
             case KeyCode::ArrowLeft:
-                viewport.scrollByTiles(-1, 0);
+                moveCursor(-1, 0);
                 break;
             case KeyCode::ArrowRight:
-                viewport.scrollByTiles(1, 0);
+                moveCursor(1, 0);
+                break;
+            case KeyCode::Enter:
+            case KeyCode::Space:
+                placement.placeSelectedSpeciesAtCursor(world, ecoCreditBalance);
                 break;
             case KeyCode::Escape:
                 return SceneTransition::exitApplication();
             case KeyCode::Character:
-                if (event.character == L'q' || event.character == L'Q') {
+                if (event.character == L'\t') {
+                    placement.selectAdjacentSpeciesInPalette(1);
+                } else if (event.character == L'q' || event.character == L'Q') {
                     return SceneTransition::exitApplication();
                 }
                 break;
@@ -172,65 +185,70 @@ public:
     }
 
 private:
-    /// Scatters organisms across the world for the render demonstration, honoring
-    /// each tile's per-category capacity. Real cursor placement arrives later.
-    void scatterInitialOrganisms(const SpeciesRegistry& registry) {
-        const std::vector<const Species*> allSpecies = registry.allSpecies();
-        if (allSpecies.empty()) {
-            return;
-        }
-        const int placementCount =
-            world.widthInTiles() * world.heightInTiles() / kTilesPerScatteredOrganism;
-        for (int placement = 0; placement < placementCount; ++placement) {
-            const int column = sceneRandom.integerInRange(0, world.widthInTiles() - 1);
-            const int row = sceneRandom.integerInRange(0, world.heightInTiles() - 1);
-            const Species* species = sceneRandom.pickUniformly(allSpecies);
-            Tile& tile = world.tileAt(column, row);
-            if (tile.hasCapacityForCategory(species->category)) {
-                tile.occupyingOrganisms.push_back(
-                    std::make_unique<Organism>(species, column, row));
-            }
-        }
+    /// Moves the placement cursor and scrolls the camera the minimum needed to
+    /// keep the cursor on screen.
+    void moveCursor(int columnDelta, int rowDelta) {
+        placement.moveCursorByTiles(columnDelta, rowDelta);
+        viewport.ensureTileVisible(placement.cursorColumnIndex(),
+                                   placement.cursorRowIndex());
     }
 
-    /// Draws one tile: the dominant organism as a bold glyph in its species color
-    /// on a neutral cell, or the biome glyph on the biome's background color.
-    static void drawTile(Renderer& renderer, const ScreenCell& cell, const Tile& tile) {
+    /// Draws one tile with the given extra attributes: the dominant organism as a
+    /// bold glyph in its species color on a neutral cell, or the biome glyph on
+    /// the biome's background color.
+    static void drawTile(Renderer& renderer, const ScreenCell& cell, const Tile& tile,
+                         int extraAttributes) {
         if (const Organism* dominant = dominantLivingOrganism(tile)) {
             renderer.drawGlyph(cell.columnIndex, cell.rowIndex, dominant->species->glyph,
-                               dominant->species->glyphColor, TerminalColor::Black, A_BOLD);
+                               dominant->species->glyphColor, TerminalColor::Black,
+                               A_BOLD | extraAttributes);
             return;
         }
         const BiomeDescriptor& descriptor = describeBiome(tile.biome);
         renderer.drawGlyph(cell.columnIndex, cell.rowIndex, descriptor.backgroundGlyph,
-                           TerminalColor::Black, descriptor.backgroundColor);
+                           TerminalColor::Black, descriptor.backgroundColor,
+                           extraAttributes);
     }
 
-    /// Draws the minimal weather/season HUD, including the live climate at the
-    /// tile in the center of the visible area.
-    void drawClimateHud(Renderer& renderer) const {
-        const int sampleColumn =
-            viewport.cameraColumnIndex() + viewport.visibleWidthInTiles() / 2;
-        const int sampleRow =
-            viewport.cameraRowIndex() + viewport.visibleHeightInTiles() / 2;
-        const Tile& sampleTile = world.tileAt(sampleColumn, sampleRow);
+    /// Draws the HUD: live weather/season, the climate at the cursor tile, the
+    /// eco-credit balance, and the selected palette species.
+    void drawHud(Renderer& renderer) const {
+        const Tile& cursorTile =
+            world.tileAt(placement.cursorColumnIndex(), placement.cursorRowIndex());
 
-        const std::string weatherLine = std::format(
-            "WEATHER: {}", describeWeatherPattern(climate.currentWeatherPattern()));
-        const std::string seasonLine =
-            std::format("SEASON:  {}", describeSeason(climate.currentSeason()));
-        const std::string climateLine = std::format(
-            "CENTER TILE: {:.1f}C  {:.0f}% humidity", sampleTile.currentTemperatureCelsius,
-            sampleTile.currentHumidityPercent);
+        renderer.drawText(0, 0,
+                          std::format("WEATHER: {}", describeWeatherPattern(
+                                                         climate.currentWeatherPattern())),
+                          TerminalColor::Yellow, TerminalColor::Black);
+        renderer.drawText(
+            0, 1, std::format("SEASON:  {}", describeSeason(climate.currentSeason())),
+            TerminalColor::Yellow, TerminalColor::Black);
+        renderer.drawText(0, 2,
+                          std::format("CURSOR TILE: {:.1f}C  {:.0f}% humidity",
+                                      cursorTile.currentTemperatureCelsius,
+                                      cursorTile.currentHumidityPercent),
+                          TerminalColor::White, TerminalColor::Black);
+        renderer.drawText(0, 3, std::format("CREDITS: {}", ecoCreditBalance),
+                          TerminalColor::Green, TerminalColor::Black);
 
-        renderer.drawText(0, 0, weatherLine, TerminalColor::Yellow, TerminalColor::Black);
-        renderer.drawText(0, 1, seasonLine, TerminalColor::Yellow, TerminalColor::Black);
-        renderer.drawText(0, 2, climateLine, TerminalColor::White, TerminalColor::Black);
+        const Species* selected = placement.selectedSpecies();
+        if (selected != nullptr) {
+            renderer.drawText(0, 4, "SELECTED:", TerminalColor::White,
+                              TerminalColor::Black);
+            renderer.drawGlyph(10, 4, selected->glyph, selected->glyphColor,
+                               TerminalColor::Black, A_BOLD);
+            renderer.drawText(12, 4,
+                              std::format("{} ({}c)", selected->displayName,
+                                          selected->ecoCreditCostToPlace),
+                              TerminalColor::White, TerminalColor::Black);
+        }
     }
 
     WorldGrid world;
     RandomNumberGenerator sceneRandom;
     ClimateSystem climate;
+    PlacementController placement;
+    int ecoCreditBalance;
     int helpBarRow;
     Viewport viewport;
 };
