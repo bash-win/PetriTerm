@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cwchar>
 #include <deque>
 #include <optional>
 
@@ -16,17 +17,37 @@ enum class KeyCode {
     Enter,
     Escape,
     Space,
+    Tab,
+    BackTab,
+    Backspace,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    FunctionKey,
     Character,
     Resize,
     Unknown,
 };
 
 /// One decoded key press. The character field is meaningful only when code is
-/// KeyCode::Character; it is L'\0' for every other code.
+/// KeyCode::Character and functionKeyNumber only when code is
+/// KeyCode::FunctionKey; both are zero for every other code.
 struct KeyEvent {
     KeyCode code = KeyCode::Unknown;
     wchar_t character = L'\0';
+    int functionKeyNumber = 0;
 };
+
+/// Decodes one raw ncurses key read into an engine KeyEvent. readStatus is the
+/// get_wch return value (KEY_CODE_YES for a keypad key, OK for a typed
+/// character) and keyValue holds the key code or character accordingly.
+///
+/// Exposed as a free function, separate from the queue, so the decoding table can
+/// be unit-tested without a terminal: it is pure, and everything else in this
+/// class needs a live ncurses session.
+KeyEvent decodeRawKeyRead(int readStatus, std::wint_t keyValue);
 
 /// Non-blocking keyboard reader that decodes raw ncurses key codes into
 /// KeyEvents and queues them for the active scene to drain each frame.

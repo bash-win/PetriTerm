@@ -19,6 +19,7 @@ find_library(PANELW_LIBRARY NAMES panelw REQUIRED)
 add_library(petriterm_core STATIC
     src/engine/TerminalWindow.cpp
     src/engine/ColorPalette.cpp
+    src/engine/TextMeasure.cpp
     src/engine/Renderer.cpp
     src/engine/InputManager.cpp
     src/engine/RandomNumberGenerator.cpp

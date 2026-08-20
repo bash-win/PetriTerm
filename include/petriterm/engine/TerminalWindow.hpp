@@ -2,6 +2,9 @@
 
 #include <stdexcept>
 
+struct _win_st;
+typedef struct _win_st WINDOW;
+
 namespace petriterm::engine {
 
 /// Thrown when ncurses initialization fails and the terminal cannot enter its
@@ -23,9 +26,10 @@ struct TerminalDimensions {
 class TerminalWindow {
 public:
     /// Initializes ncurses, enters raw single-key input mode, hides the cursor,
-    /// and starts color support. Installs SIGINT/SIGTERM handlers that restore
-    /// the terminal before the process exits. Throws TerminalInitializationError
-    /// if the standard streams are not attached to a terminal.
+    /// starts color support, and shortens the escape-sequence disambiguation
+    /// delay. Installs SIGINT/SIGTERM handlers that restore the terminal before
+    /// the process exits. Throws TerminalInitializationError if the standard
+    /// streams are not attached to a terminal.
     TerminalWindow();
 
     /// Restores the terminal to its pre-curses state exactly once and returns
@@ -41,10 +45,11 @@ public:
     /// so callers observe resizes immediately.
     TerminalDimensions currentDimensions() const;
 
-    /// Blocks until the terminal has at least the given minimum dimensions,
-    /// drawing a resize prompt until satisfied. Returns false if the user presses
-    /// q to quit instead of resizing.
-    bool waitUntilTerminalIsAtLeast(int minimumColumns, int minimumRows);
+    /// Returns the full-screen window ncurses created at initialization, for
+    /// handing to a Renderer. Exposed here, from the class that already owns the
+    /// curses session, so no caller has to name stdscr and pull ncurses.h into
+    /// game code.
+    WINDOW* rootWindow() const;
 
 private:
     bool ncursesActive = false;
