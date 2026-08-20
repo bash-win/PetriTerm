@@ -24,6 +24,7 @@ add_library(petriterm_core STATIC
     src/engine/InputManager.cpp
     src/engine/RandomNumberGenerator.cpp
     src/engine/SceneManager.cpp
+    src/engine/SimulationClock.cpp
     src/engine/GameLoop.cpp
     src/world/NoiseGenerator.cpp
     src/world/Biome.cpp
