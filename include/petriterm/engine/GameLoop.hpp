@@ -5,6 +5,7 @@ namespace petriterm::engine {
 class SceneManager;
 class InputManager;
 class Renderer;
+class TerminalWindow;
 
 /// Owns timing. Runs a fixed-timestep simulation decoupled from variable-rate
 /// rendering: simulation ticks advance at a player-adjustable rate independent
@@ -20,8 +21,13 @@ public:
     /// Each iteration polls input, advances the simulation by as many fixed
     /// ticks as elapsed time allows, renders one frame, and sleeps to hold the
     /// target frame rate.
+    ///
+    /// While the terminal is below the minimum playable size the loop shows a
+    /// resize notice instead of the scene stack, still polling input so the
+    /// player can quit. The check runs every frame, so startup in a small
+    /// terminal and shrinking one mid-game behave identically.
     void runUntilExitRequested(SceneManager& sceneManager, InputManager& inputManager,
-                               Renderer& renderer);
+                               Renderer& renderer, const TerminalWindow& terminal);
 
     /// Sets how many simulation ticks occur per real second. Zero pauses the
     /// simulation while rendering continues.

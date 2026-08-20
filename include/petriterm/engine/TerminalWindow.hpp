@@ -26,9 +26,10 @@ struct TerminalDimensions {
 class TerminalWindow {
 public:
     /// Initializes ncurses, enters raw single-key input mode, hides the cursor,
-    /// and starts color support. Installs SIGINT/SIGTERM handlers that restore
-    /// the terminal before the process exits. Throws TerminalInitializationError
-    /// if the standard streams are not attached to a terminal.
+    /// starts color support, and shortens the escape-sequence disambiguation
+    /// delay. Installs SIGINT/SIGTERM handlers that restore the terminal before
+    /// the process exits. Throws TerminalInitializationError if the standard
+    /// streams are not attached to a terminal.
     TerminalWindow();
 
     /// Restores the terminal to its pre-curses state exactly once and returns
@@ -49,11 +50,6 @@ public:
     /// curses session, so no caller has to name stdscr and pull ncurses.h into
     /// game code.
     WINDOW* rootWindow() const;
-
-    /// Blocks until the terminal has at least the given minimum dimensions,
-    /// drawing a resize prompt until satisfied. Returns false if the user presses
-    /// q to quit instead of resizing.
-    bool waitUntilTerminalIsAtLeast(int minimumColumns, int minimumRows);
 
 private:
     bool ncursesActive = false;

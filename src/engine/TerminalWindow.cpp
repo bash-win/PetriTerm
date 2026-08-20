@@ -8,6 +8,13 @@ namespace petriterm::engine {
 
 namespace {
 
+/// Milliseconds ncurses waits for the remainder of an escape sequence before
+/// concluding that a lone Escape was pressed. The default of 1000 makes Escape
+/// feel broken - it is withheld until the next key arrives - while a value this
+/// short is still far longer than the sub-millisecond gap between the bytes of a
+/// real terminal's arrow-key sequence.
+constexpr int kEscapeDisambiguationDelayMilliseconds = 25;
+
 /// Restores the terminal from curses mode when a terminating signal arrives,
 /// then re-raises the signal under the default handler so the process exits with
 /// the conventional status for that signal.
@@ -28,6 +35,7 @@ TerminalWindow::TerminalWindow() {
     noecho();
     keypad(stdscr, TRUE);
     curs_set(0);
+    set_escdelay(kEscapeDisambiguationDelayMilliseconds);
     if (has_colors()) {
         start_color();
         use_default_colors();
@@ -55,25 +63,6 @@ TerminalDimensions TerminalWindow::currentDimensions() const {
 
 WINDOW* TerminalWindow::rootWindow() const {
     return stdscr;
-}
-
-bool TerminalWindow::waitUntilTerminalIsAtLeast(int minimumColumns, int minimumRows) {
-    while (true) {
-        const TerminalDimensions dimensions = currentDimensions();
-        if (dimensions.columns >= minimumColumns && dimensions.rows >= minimumRows) {
-            return true;
-        }
-        erase();
-        mvprintw(0, 0, "Terminal too small.");
-        mvprintw(1, 0, "Need at least %d x %d; current size is %d x %d.", minimumColumns,
-                 minimumRows, dimensions.columns, dimensions.rows);
-        mvprintw(2, 0, "Resize the terminal, or press q to quit.");
-        refresh();
-        const int keyCode = getch();
-        if (keyCode == 'q' || keyCode == 'Q') {
-            return false;
-        }
-    }
 }
 
 }

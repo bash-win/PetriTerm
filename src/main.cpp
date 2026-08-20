@@ -47,8 +47,6 @@ using petriterm::world::generateWorld;
 using petriterm::world::Tile;
 using petriterm::world::WorldGrid;
 
-constexpr int kMinimumTerminalColumns = 80;
-constexpr int kMinimumTerminalRows = 24;
 constexpr std::uint64_t kBootstrapWorldSeed = 42;
 constexpr int kStartingEcoCredits = 50;
 
@@ -126,7 +124,7 @@ public:
 
     void render(Renderer& renderer) override {
         constexpr std::string_view hint =
-            "arrows: cursor   tab: species   enter/space: place   q: quit";
+            "arrows: cursor   tab/shift-tab: species   enter/space: place   q: quit";
         renderer.beginFrame();
         for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
             for (int columnOffset = 0; columnOffset < viewport.visibleWidthInTiles();
@@ -168,10 +166,14 @@ public:
                 break;
             case KeyCode::Escape:
                 return SceneTransition::exitApplication();
+            case KeyCode::Tab:
+                placement.selectAdjacentSpeciesInPalette(1);
+                break;
+            case KeyCode::BackTab:
+                placement.selectAdjacentSpeciesInPalette(-1);
+                break;
             case KeyCode::Character:
-                if (event.character == L'\t') {
-                    placement.selectAdjacentSpeciesInPalette(1);
-                } else if (event.character == L'q' || event.character == L'Q') {
+                if (event.character == L'q' || event.character == L'Q') {
                     return SceneTransition::exitApplication();
                 }
                 break;
@@ -264,10 +266,6 @@ int main() {
         speciesRegistry.loadFromFile(locateSpeciesFile());
 
         petriterm::engine::TerminalWindow terminal;
-        if (!terminal.waitUntilTerminalIsAtLeast(kMinimumTerminalColumns,
-                                                 kMinimumTerminalRows)) {
-            return 0;
-        }
         petriterm::engine::ColorPalette palette;
         palette.initializeColorPairs();
         petriterm::engine::Renderer renderer(terminal.rootWindow(), palette);
@@ -282,7 +280,7 @@ int main() {
             std::move(world), speciesRegistry, dimensions.columns, dimensions.rows));
 
         petriterm::engine::GameLoop gameLoop(60, 30.0);
-        gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer);
+        gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer, terminal);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "PetriTerm fatal error: %s\n", error.what());
         return 1;
