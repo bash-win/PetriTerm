@@ -10,8 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include <ncurses.h>
-
 #include "petriterm/engine/ColorPalette.hpp"
 #include "petriterm/engine/GameLoop.hpp"
 #include "petriterm/engine/InputManager.hpp"
@@ -142,12 +140,11 @@ public:
                 }
                 const bool isCursorTile = tileColumn == placement.cursorColumnIndex() &&
                                           tileRow == placement.cursorRowIndex();
-                drawTile(renderer, *cell, world.tileAt(tileColumn, tileRow),
-                         isCursorTile ? A_REVERSE : 0);
+                drawTile(renderer, *cell, world.tileAt(tileColumn, tileRow), isCursorTile);
             }
         }
         drawHud(renderer);
-        renderer.drawText(0, helpBarRow, hint, TerminalColor::Cyan);
+        renderer.drawText(0, helpBarRow, hint, TextStyle{TerminalColor::Cyan});
         renderer.endFrame();
     }
 
@@ -193,21 +190,23 @@ private:
                                    placement.cursorRowIndex());
     }
 
-    /// Draws one tile with the given extra attributes: the dominant organism as a
-    /// bold glyph in its species color on a neutral cell, or the biome glyph on
-    /// the biome's background color.
+    /// Draws one tile: the dominant organism as a bold glyph in its species color
+    /// on a neutral cell, or the biome glyph on the biome's background color. The
+    /// cursor tile is inverted on top of whichever of those it is.
     static void drawTile(Renderer& renderer, const ScreenCell& cell, const Tile& tile,
-                         int extraAttributes) {
+                         bool isCursorTile) {
         if (const Organism* dominant = dominantLivingOrganism(tile)) {
-            renderer.drawGlyph(cell.columnIndex, cell.rowIndex, dominant->species->glyph,
-                               dominant->species->glyphColor, TerminalColor::Black,
-                               A_BOLD | extraAttributes);
+            renderer.drawGlyph(
+                cell.columnIndex, cell.rowIndex, dominant->species->glyph,
+                TextStyle{dominant->species->glyphColor, TerminalColor::Black,
+                          isCursorTile ? TextEmphasis::BoldInverted : TextEmphasis::Bold});
             return;
         }
         const BiomeDescriptor& descriptor = describeBiome(tile.biome);
-        renderer.drawGlyph(cell.columnIndex, cell.rowIndex, descriptor.backgroundGlyph,
-                           TerminalColor::Black, descriptor.backgroundColor,
-                           extraAttributes);
+        renderer.drawGlyph(
+            cell.columnIndex, cell.rowIndex, descriptor.backgroundGlyph,
+            TextStyle{TerminalColor::Black, descriptor.backgroundColor,
+                      isCursorTile ? TextEmphasis::Inverted : TextEmphasis::Normal});
     }
 
     /// Draws the HUD: live weather/season, the climate at the cursor tile, the
@@ -216,31 +215,34 @@ private:
         const Tile& cursorTile =
             world.tileAt(placement.cursorColumnIndex(), placement.cursorRowIndex());
 
+        constexpr TextStyle labelStyle{TerminalColor::Yellow, TerminalColor::Black};
+        constexpr TextStyle valueStyle{TerminalColor::White, TerminalColor::Black};
+
         renderer.drawText(0, 0,
                           std::format("WEATHER: {}", describeWeatherPattern(
                                                          climate.currentWeatherPattern())),
-                          TerminalColor::Yellow, TerminalColor::Black);
+                          labelStyle);
         renderer.drawText(
             0, 1, std::format("SEASON:  {}", describeSeason(climate.currentSeason())),
-            TerminalColor::Yellow, TerminalColor::Black);
+            labelStyle);
         renderer.drawText(0, 2,
                           std::format("CURSOR TILE: {:.1f}C  {:.0f}% humidity",
                                       cursorTile.currentTemperatureCelsius,
                                       cursorTile.currentHumidityPercent),
-                          TerminalColor::White, TerminalColor::Black);
+                          valueStyle);
         renderer.drawText(0, 3, std::format("CREDITS: {}", ecoCreditBalance),
-                          TerminalColor::Green, TerminalColor::Black);
+                          TextStyle{TerminalColor::Green, TerminalColor::Black});
 
         const Species* selected = placement.selectedSpecies();
         if (selected != nullptr) {
-            renderer.drawText(0, 4, "SELECTED:", TerminalColor::White,
-                              TerminalColor::Black);
-            renderer.drawGlyph(10, 4, selected->glyph, selected->glyphColor,
-                               TerminalColor::Black, A_BOLD);
+            renderer.drawText(0, 4, "SELECTED:", valueStyle);
+            renderer.drawGlyph(
+                10, 4, selected->glyph,
+                TextStyle{selected->glyphColor, TerminalColor::Black, TextEmphasis::Bold});
             renderer.drawText(12, 4,
                               std::format("{} ({}c)", selected->displayName,
                                           selected->ecoCreditCostToPlace),
-                              TerminalColor::White, TerminalColor::Black);
+                              valueStyle);
         }
     }
 
@@ -268,7 +270,7 @@ int main() {
         }
         petriterm::engine::ColorPalette palette;
         palette.initializeColorPairs();
-        petriterm::engine::Renderer renderer(stdscr, palette);
+        petriterm::engine::Renderer renderer(terminal.rootWindow(), palette);
         petriterm::engine::InputManager inputManager;
         petriterm::engine::SceneManager sceneManager;
 

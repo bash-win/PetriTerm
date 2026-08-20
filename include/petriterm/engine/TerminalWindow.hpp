@@ -2,6 +2,9 @@
 
 #include <stdexcept>
 
+struct _win_st;
+typedef struct _win_st WINDOW;
+
 namespace petriterm::engine {
 
 /// Thrown when ncurses initialization fails and the terminal cannot enter its
@@ -40,6 +43,12 @@ public:
     /// Returns the current terminal size in character cells, re-queried each call
     /// so callers observe resizes immediately.
     TerminalDimensions currentDimensions() const;
+
+    /// Returns the full-screen window ncurses created at initialization, for
+    /// handing to a Renderer. Exposed here, from the class that already owns the
+    /// curses session, so no caller has to name stdscr and pull ncurses.h into
+    /// game code.
+    WINDOW* rootWindow() const;
 
     /// Blocks until the terminal has at least the given minimum dimensions,
     /// drawing a resize prompt until satisfied. Returns false if the user presses

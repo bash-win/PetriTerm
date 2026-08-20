@@ -53,6 +53,10 @@ TerminalDimensions TerminalWindow::currentDimensions() const {
     return TerminalDimensions{columns, rows};
 }
 
+WINDOW* TerminalWindow::rootWindow() const {
+    return stdscr;
+}
+
 bool TerminalWindow::waitUntilTerminalIsAtLeast(int minimumColumns, int minimumRows) {
     while (true) {
         const TerminalDimensions dimensions = currentDimensions();
