@@ -17,6 +17,7 @@
 #include "petriterm/engine/Renderer.hpp"
 #include "petriterm/engine/Scene.hpp"
 #include "petriterm/engine/SceneManager.hpp"
+#include "petriterm/engine/SimulationClock.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 #include "petriterm/game/PlacementController.hpp"
 #include "petriterm/game/Viewport.hpp"
@@ -31,6 +32,7 @@
 namespace {
 
 using namespace petriterm::engine;
+using petriterm::engine::SimulationClock;
 using petriterm::game::PlacementController;
 using petriterm::game::ScreenCell;
 using petriterm::game::Viewport;
@@ -103,18 +105,20 @@ std::filesystem::path locateSpeciesFile() {
 }
 
 /// Bootstrap scene for placing organisms: a cursor moves over the generated
-/// world (the camera follows), Tab cycles the species palette, and Enter/Space
-/// places the selected species for its eco-credit cost. Live weather runs in the
-/// HUD. Proves placement and the eco-credit economy integrate. Replaced by the
-/// real simulation screen in a later milestone.
+/// world (the camera follows), Tab cycles the species palette, and Enter places
+/// the selected species for its eco-credit cost. Space pauses, +/- change speed,
+/// and '.' single-steps. Live weather runs in the HUD. Proves placement, the
+/// eco-credit economy, and playback control integrate. Replaced by the real
+/// simulation screen in a later milestone.
 class WorldViewScene : public Scene {
 public:
     WorldViewScene(WorldGrid generatedWorld, const SpeciesRegistry& registry,
-                   int screenColumns, int screenRows)
+                   SimulationClock& simulationClock, int screenColumns, int screenRows)
         : world(std::move(generatedWorld)),
           sceneRandom(kBootstrapWorldSeed),
           climate(sceneRandom),
           placement(world.widthInTiles(), world.heightInTiles(), registry.allSpecies()),
+          simulationClock(simulationClock),
           ecoCreditBalance(kStartingEcoCredits),
           helpBarRow(screenRows - 1),
           viewport(world.widthInTiles(), world.heightInTiles(), 0, 0, screenColumns,
@@ -124,7 +128,8 @@ public:
 
     void render(Renderer& renderer) override {
         constexpr std::string_view hint =
-            "arrows: cursor   tab/shift-tab: species   enter/space: place   q: quit";
+            "arrows: cursor  tab: species  enter: place  space: pause  +/-: speed  "
+            ".: step  q: quit";
         renderer.beginFrame();
         for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
             for (int columnOffset = 0; columnOffset < viewport.visibleWidthInTiles();
@@ -161,8 +166,10 @@ public:
                 moveCursor(1, 0);
                 break;
             case KeyCode::Enter:
-            case KeyCode::Space:
                 placement.placeSelectedSpeciesAtCursor(world, ecoCreditBalance);
+                break;
+            case KeyCode::Space:
+                simulationClock.togglePause();
                 break;
             case KeyCode::Escape:
                 return SceneTransition::exitApplication();
@@ -173,6 +180,7 @@ public:
                 placement.selectAdjacentSpeciesInPalette(-1);
                 break;
             case KeyCode::Character:
+                handleCharacterKey(event.character);
                 if (event.character == L'q' || event.character == L'Q') {
                     return SceneTransition::exitApplication();
                 }
@@ -184,6 +192,28 @@ public:
     }
 
 private:
+    /// Handles the character keys that control playback. Kept separate from the
+    /// key-code switch because these are all typed characters rather than named
+    /// keys, and both spellings of each are accepted so the player does not have
+    /// to reach for shift.
+    void handleCharacterKey(wchar_t character) {
+        switch (character) {
+            case L'+':
+            case L'=':
+                simulationClock.selectFasterSpeed();
+                break;
+            case L'-':
+            case L'_':
+                simulationClock.selectSlowerSpeed();
+                break;
+            case L'.':
+                simulationClock.requestSingleTickStep();
+                break;
+            default:
+                break;
+        }
+    }
+
     /// Moves the placement cursor and scrolls the camera the minimum needed to
     /// keep the cursor on screen.
     void moveCursor(int columnDelta, int rowDelta) {
@@ -234,6 +264,19 @@ private:
                           valueStyle);
         renderer.drawText(0, 3, std::format("CREDITS: {}", ecoCreditBalance),
                           TextStyle{TerminalColor::Green, TerminalColor::Black});
+        renderer.drawText(
+            0, 5,
+            std::format("SPEED: {}  tick {}", simulationClock.describeSpeed(),
+                        simulationClock.elapsedTickCount()),
+            TextStyle{
+                simulationClock.isPaused() ? TerminalColor::Yellow : TerminalColor::White,
+                TerminalColor::Black,
+                simulationClock.isPaused() ? TextEmphasis::Bold : TextEmphasis::Normal});
+        if (simulationClock.isFallingBehind()) {
+            renderer.drawText(
+                0, 6, "SLOW: simulation is behind the selected speed",
+                TextStyle{TerminalColor::Red, TerminalColor::Black, TextEmphasis::Bold});
+        }
 
         const Species* selected = placement.selectedSpecies();
         if (selected != nullptr) {
@@ -252,6 +295,7 @@ private:
     RandomNumberGenerator sceneRandom;
     ClimateSystem climate;
     PlacementController placement;
+    SimulationClock& simulationClock;
     int ecoCreditBalance;
     int helpBarRow;
     Viewport viewport;
@@ -276,10 +320,14 @@ int main() {
         WorldGrid world = generateWorld(petriterm::world::kDefaultWorldWidthInTiles,
                                         petriterm::world::kDefaultWorldHeightInTiles,
                                         kBootstrapWorldSeed);
+        petriterm::engine::SimulationClock simulationClock;
         sceneManager.pushScene(std::make_unique<WorldViewScene>(
-            std::move(world), speciesRegistry, dimensions.columns, dimensions.rows));
+            std::move(world), speciesRegistry, simulationClock, dimensions.columns,
+            dimensions.rows));
 
-        petriterm::engine::GameLoop gameLoop(60, 30.0);
+        // Thirty frames a second: nothing on screen changes faster than a tick,
+        // and the simulation rate is the clock's business, not the loop's.
+        petriterm::engine::GameLoop gameLoop(30, simulationClock);
         gameLoop.runUntilExitRequested(sceneManager, inputManager, renderer, terminal);
     } catch (const std::exception& error) {
         std::fprintf(stderr, "PetriTerm fatal error: %s\n", error.what());

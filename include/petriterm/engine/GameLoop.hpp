@@ -6,16 +6,18 @@ class SceneManager;
 class InputManager;
 class Renderer;
 class TerminalWindow;
+class SimulationClock;
 
 /// Owns timing. Runs a fixed-timestep simulation decoupled from variable-rate
-/// rendering: simulation ticks advance at a player-adjustable rate independent
-/// of the render frame rate, so the simulation stays deterministic regardless
-/// of how fast frames are drawn.
+/// rendering: the simulation advances in ticks of a constant simulated duration
+/// while frames are drawn at the render rate, so the tick sequence is identical
+/// no matter how fast the frames are or what playback speed the player chose.
 class GameLoop {
 public:
-    /// Constructs a loop targeting the given render frame rate and the given
-    /// initial simulation tick rate (ticks per second; 0 pauses simulation).
-    GameLoop(int targetRenderFramesPerSecond, double initialSimulationTicksPerSecond);
+    /// Constructs a loop targeting the given render frame rate and driven by the
+    /// given clock. The clock is owned externally and shared with the scenes that
+    /// pause and re-speed it.
+    GameLoop(int targetRenderFramesPerSecond, SimulationClock& simulationClock);
 
     /// Runs until the active scene requests exit or the scene stack empties.
     /// Each iteration polls input, advances the simulation by as many fixed
@@ -29,13 +31,9 @@ public:
     void runUntilExitRequested(SceneManager& sceneManager, InputManager& inputManager,
                                Renderer& renderer, const TerminalWindow& terminal);
 
-    /// Sets how many simulation ticks occur per real second. Zero pauses the
-    /// simulation while rendering continues.
-    void setSimulationTicksPerSecond(double ticksPerSecond);
-
 private:
     int targetRenderFramesPerSecond;
-    double simulationTicksPerSecond;
+    SimulationClock& simulationClock;
 };
 
 }

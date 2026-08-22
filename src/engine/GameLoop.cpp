@@ -8,6 +8,7 @@
 #include "petriterm/engine/InputManager.hpp"
 #include "petriterm/engine/Renderer.hpp"
 #include "petriterm/engine/SceneManager.hpp"
+#include "petriterm/engine/SimulationClock.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 
 namespace petriterm::engine {
@@ -56,13 +57,9 @@ bool isQuitKey(const KeyEvent& event) {
 
 }
 
-GameLoop::GameLoop(int targetRenderFramesPerSecond, double initialSimulationTicksPerSecond)
+GameLoop::GameLoop(int targetRenderFramesPerSecond, SimulationClock& simulationClock)
     : targetRenderFramesPerSecond(std::max(1, targetRenderFramesPerSecond)),
-      simulationTicksPerSecond(std::max(0.0, initialSimulationTicksPerSecond)) {}
-
-void GameLoop::setSimulationTicksPerSecond(double ticksPerSecond) {
-    simulationTicksPerSecond = std::max(0.0, ticksPerSecond);
-}
+      simulationClock(simulationClock) {}
 
 void GameLoop::runUntilExitRequested(SceneManager& sceneManager, InputManager& inputManager,
                                      Renderer& renderer, const TerminalWindow& terminal) {
@@ -115,17 +112,36 @@ void GameLoop::runUntilExitRequested(SceneManager& sceneManager, InputManager& i
             continue;
         }
 
-        if (simulationTicksPerSecond > 0.0) {
-            const double tickDurationSeconds = 1.0 / simulationTicksPerSecond;
-            accumulatedSeconds = std::min(accumulatedSeconds + elapsedSeconds,
-                                          tickDurationSeconds * kMaximumTicksPerFrame);
-            while (accumulatedSeconds >= tickDurationSeconds) {
-                sceneManager.updateActiveScene(tickDurationSeconds);
-                accumulatedSeconds -= tickDurationSeconds;
-            }
-        } else {
+        // Every tick is advanced by the same constant simulated duration. The
+        // playback rate below decides only how many ticks run this frame, never
+        // how much time one tick represents - that separation is what keeps a
+        // run at 8x identical to the same run at 1x.
+        int ticksThisFrame = 0;
+        if (simulationClock.consumeSingleTickStep()) {
+            sceneManager.updateActiveScene(SimulationClock::kSecondsPerSimulationTick);
+            ticksThisFrame = 1;
             accumulatedSeconds = 0.0;
+            simulationClock.recordFrameBacklogDropped(false);
+        } else if (const double ticksPerSecond = simulationClock.playbackTicksPerSecond();
+                   ticksPerSecond > 0.0) {
+            const double tickPeriodSeconds = 1.0 / ticksPerSecond;
+            const double backlogCapSeconds = tickPeriodSeconds * kMaximumTicksPerFrame;
+            const double requestedSeconds = accumulatedSeconds + elapsedSeconds;
+            const bool backlogWasDropped = requestedSeconds > backlogCapSeconds;
+            accumulatedSeconds = std::min(requestedSeconds, backlogCapSeconds);
+            while (accumulatedSeconds >= tickPeriodSeconds) {
+                sceneManager.updateActiveScene(SimulationClock::kSecondsPerSimulationTick);
+                accumulatedSeconds -= tickPeriodSeconds;
+                ++ticksThisFrame;
+            }
+            simulationClock.recordFrameBacklogDropped(backlogWasDropped);
+        } else {
+            // Paused: drop banked time so unpausing does not release a burst of
+            // catch-up ticks.
+            accumulatedSeconds = 0.0;
+            simulationClock.recordFrameBacklogDropped(false);
         }
+        simulationClock.recordTicksAdvanced(ticksThisFrame);
 
         sceneManager.renderActiveScene(renderer);
         sleepRemainderOfFrame(frameStart);
