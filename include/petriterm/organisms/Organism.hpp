@@ -31,6 +31,11 @@ struct Organism {
     /// Returns true if the organism is alive, off reproduction cooldown, and has
     /// at least the energy its species needs to reproduce.
     bool isReadyToReproduce() const;
+
+    /// Charges the species' reproduction energy cost and restarts the cooldown.
+    /// Called on the parent once an offspring has been placed, so paying the cost
+    /// and going back on cooldown can never drift apart.
+    void payReproductionCostAndResetCooldown();
 };
 
 }
