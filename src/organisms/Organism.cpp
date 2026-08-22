@@ -36,4 +36,9 @@ bool Organism::isReadyToReproduce() const {
            remainingEnergyUnits >= species->traits.energyRequiredToReproduce;
 }
 
+void Organism::payReproductionCostAndResetCooldown() {
+    remainingEnergyUnits -= species->traits.reproductionEnergyCost;
+    ticksUntilCanReproduce = species->traits.reproductionCooldownTicks;
+}
+
 }

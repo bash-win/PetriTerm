@@ -7,7 +7,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <utility>
 #include <vector>
 
 #include "petriterm/engine/ColorPalette.hpp"
@@ -24,6 +23,7 @@
 #include "petriterm/organisms/Organism.hpp"
 #include "petriterm/organisms/Species.hpp"
 #include "petriterm/organisms/SpeciesRegistry.hpp"
+#include "petriterm/simulation/SimulationEngine.hpp"
 #include "petriterm/world/Biome.hpp"
 #include "petriterm/world/ClimateSystem.hpp"
 #include "petriterm/world/WorldGenerator.hpp"
@@ -40,8 +40,9 @@ using petriterm::organisms::Organism;
 using petriterm::organisms::OrganismCategory;
 using petriterm::organisms::Species;
 using petriterm::organisms::SpeciesRegistry;
+using petriterm::simulation::SimulationEngine;
+using petriterm::simulation::TickReport;
 using petriterm::world::BiomeDescriptor;
-using petriterm::world::ClimateSystem;
 using petriterm::world::describeBiome;
 using petriterm::world::describeSeason;
 using petriterm::world::describeWeatherPattern;
@@ -104,33 +105,33 @@ std::filesystem::path locateSpeciesFile() {
     return "species.txt";
 }
 
-/// Bootstrap scene for placing organisms: a cursor moves over the generated
-/// world (the camera follows), Tab cycles the species palette, and Enter places
-/// the selected species for its eco-credit cost. Space pauses, +/- change speed,
-/// and '.' single-steps. Live weather runs in the HUD. Proves placement, the
-/// eco-credit economy, and playback control integrate. Replaced by the real
-/// simulation screen in a later milestone.
+/// Bootstrap scene for placing organisms: a cursor moves over the world (the
+/// camera follows), Tab cycles the species palette, and Enter places the selected
+/// species for its eco-credit cost. Space pauses, +/- change speed, and '.'
+/// single-steps. The simulation runs underneath, so placed organisms feed, breed,
+/// and die while the HUD reports the census. Replaced by the real simulation
+/// screen in a later milestone.
 class WorldViewScene : public Scene {
 public:
-    WorldViewScene(WorldGrid generatedWorld, const SpeciesRegistry& registry,
+    WorldViewScene(SimulationEngine& simulation, const SpeciesRegistry& registry,
                    SimulationClock& simulationClock, int screenColumns, int screenRows)
-        : world(std::move(generatedWorld)),
-          sceneRandom(kBootstrapWorldSeed),
-          climate(sceneRandom),
-          placement(world.widthInTiles(), world.heightInTiles(), registry.allSpecies()),
+        : simulation(simulation),
+          placement(simulation.world().widthInTiles(), simulation.world().heightInTiles(),
+                    registry.allSpecies()),
           simulationClock(simulationClock),
           ecoCreditBalance(kStartingEcoCredits),
           helpBarRow(screenRows - 1),
-          viewport(world.widthInTiles(), world.heightInTiles(), 0, 0, screenColumns,
-                   screenRows - 1) {}
+          viewport(simulation.world().widthInTiles(), simulation.world().heightInTiles(), 0,
+                   0, screenColumns, screenRows - 1) {}
 
-    void update(double) override { climate.advanceWeatherAndApplyToWorld(world); }
+    void update(double) override { simulation.advanceOneTick(); }
 
     void render(Renderer& renderer) override {
         constexpr std::string_view hint =
             "arrows: cursor  tab: species  enter: place  space: pause  +/-: speed  "
             ".: step  q: quit";
         renderer.beginFrame();
+        const WorldGrid& world = simulation.world();
         for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
             for (int columnOffset = 0; columnOffset < viewport.visibleWidthInTiles();
                  ++columnOffset) {
@@ -166,7 +167,8 @@ public:
                 moveCursor(1, 0);
                 break;
             case KeyCode::Enter:
-                placement.placeSelectedSpeciesAtCursor(world, ecoCreditBalance);
+                placement.placeSelectedSpeciesAtCursor(simulation.world(),
+                                                       ecoCreditBalance);
                 break;
             case KeyCode::Space:
                 simulationClock.togglePause();
@@ -242,21 +244,24 @@ private:
     }
 
     /// Draws the HUD: live weather/season, the climate at the cursor tile, the
-    /// eco-credit balance, and the selected palette species.
+    /// eco-credit balance, the selected palette species, and the census from the
+    /// most recent tick.
     void drawHud(Renderer& renderer) const {
-        const Tile& cursorTile =
-            world.tileAt(placement.cursorColumnIndex(), placement.cursorRowIndex());
+        const Tile& cursorTile = simulation.world().tileAt(placement.cursorColumnIndex(),
+                                                           placement.cursorRowIndex());
 
         constexpr TextStyle labelStyle{TerminalColor::Yellow, TerminalColor::Black};
         constexpr TextStyle valueStyle{TerminalColor::White, TerminalColor::Black};
 
-        renderer.drawText(0, 0,
-                          std::format("WEATHER: {}", describeWeatherPattern(
-                                                         climate.currentWeatherPattern())),
-                          labelStyle);
         renderer.drawText(
-            0, 1, std::format("SEASON:  {}", describeSeason(climate.currentSeason())),
+            0, 0,
+            std::format("WEATHER: {}", describeWeatherPattern(
+                                           simulation.climate().currentWeatherPattern())),
             labelStyle);
+        renderer.drawText(0, 1,
+                          std::format("SEASON:  {}",
+                                      describeSeason(simulation.climate().currentSeason())),
+                          labelStyle);
         renderer.drawText(0, 2,
                           std::format("CURSOR TILE: {:.1f}C  {:.0f}% humidity",
                                       cursorTile.currentTemperatureCelsius,
@@ -267,14 +272,26 @@ private:
         renderer.drawText(
             0, 5,
             std::format("SPEED: {}  tick {}", simulationClock.describeSpeed(),
-                        simulationClock.elapsedTickCount()),
+                        simulation.tickIndex()),
             TextStyle{
                 simulationClock.isPaused() ? TerminalColor::Yellow : TerminalColor::White,
                 TerminalColor::Black,
                 simulationClock.isPaused() ? TextEmphasis::Bold : TextEmphasis::Normal});
+
+        const TickReport& report = simulation.latestTickReport();
+        renderer.drawText(
+            0, 6,
+            std::format("LIFE: {}  P{} H{} C{} O{} D{}  +{} -{}", report.totalLivingCount,
+                        report.livingCountOf(OrganismCategory::Plant),
+                        report.livingCountOf(OrganismCategory::Herbivore),
+                        report.livingCountOf(OrganismCategory::Carnivore),
+                        report.livingCountOf(OrganismCategory::Omnivore),
+                        report.livingCountOf(OrganismCategory::Decomposer),
+                        report.birthCount, report.deathCount),
+            valueStyle);
         if (simulationClock.isFallingBehind()) {
             renderer.drawText(
-                0, 6, "SLOW: simulation is behind the selected speed",
+                0, 7, "SLOW: simulation is behind the selected speed",
                 TextStyle{TerminalColor::Red, TerminalColor::Black, TextEmphasis::Bold});
         }
 
@@ -291,9 +308,7 @@ private:
         }
     }
 
-    WorldGrid world;
-    RandomNumberGenerator sceneRandom;
-    ClimateSystem climate;
+    SimulationEngine& simulation;
     PlacementController placement;
     SimulationClock& simulationClock;
     int ecoCreditBalance;
@@ -314,16 +329,22 @@ int main() {
         palette.initializeColorPairs();
         petriterm::engine::Renderer renderer(terminal.rootWindow(), palette);
         petriterm::engine::InputManager inputManager;
-        petriterm::engine::SceneManager sceneManager;
 
-        const auto dimensions = terminal.currentDimensions();
-        WorldGrid world = generateWorld(petriterm::world::kDefaultWorldWidthInTiles,
-                                        petriterm::world::kDefaultWorldHeightInTiles,
-                                        kBootstrapWorldSeed);
+        // The RNG and the engine outlive the scene stack that borrows them, so they
+        // are declared before the scene manager and destroyed after it.
+        RandomNumberGenerator simulationRandom(kBootstrapWorldSeed);
+        SimulationEngine simulation(
+            generateWorld(petriterm::world::kDefaultWorldWidthInTiles,
+                          petriterm::world::kDefaultWorldHeightInTiles,
+                          kBootstrapWorldSeed),
+            simulationRandom);
         petriterm::engine::SimulationClock simulationClock;
-        sceneManager.pushScene(std::make_unique<WorldViewScene>(
-            std::move(world), speciesRegistry, simulationClock, dimensions.columns,
-            dimensions.rows));
+
+        petriterm::engine::SceneManager sceneManager;
+        const auto dimensions = terminal.currentDimensions();
+        sceneManager.pushScene(
+            std::make_unique<WorldViewScene>(simulation, speciesRegistry, simulationClock,
+                                             dimensions.columns, dimensions.rows));
 
         // Thirty frames a second: nothing on screen changes faster than a tick,
         // and the simulation rate is the clock's business, not the loop's.

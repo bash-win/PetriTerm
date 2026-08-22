@@ -36,6 +36,7 @@ add_library(petriterm_core STATIC
     src/organisms/Species.cpp
     src/organisms/SpeciesRegistry.cpp
     src/organisms/Organism.cpp
+    src/simulation/SimulationEngine.cpp
     src/game/Viewport.cpp
     src/game/PlacementController.cpp
 )
