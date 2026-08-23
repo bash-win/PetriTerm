@@ -8,16 +8,16 @@ each sized to review on its own.
 Merged through PR #16. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
 climate), organisms (categories, traits, species, registry, `Organism`),
-simulation (`SimulationEngine` and its four-phase tick), game (viewport,
-placement). 116 tests. CI runs clang-format, clang-tidy, gcc, clang.
+simulation (`SimulationEngine`, its four-phase tick, and the nutrient cycle),
+game (viewport, placement). 120 tests. CI runs clang-format, clang-tidy, gcc,
+clang.
 
 ## What's actually broken or missing
 
-- Death feeds nothing back into the ground. A decomposer scavenges corpses in the
-  tick they die and that is the entire loop: there is no detritus, and
-  `Tile::soilNutrientLevel` is written once by `WorldGenerator` and never read
-  again, so nothing a plant grows on ever depletes or recovers. PR 02.
 - Eco-credits can only be spent, never earned. No objectives, no failure state.
+- The nutrient cycle is simulated but invisible. Soil and detritus move every
+  tick and the HUD shows neither, so a plot going barren looks like plants dying
+  for no reason. PR 07 is where that readout belongs.
 - Resize is decoded and dropped. `InputManager` maps `KEY_RESIZE` to
   `KeyCode::Resize`, but nothing handles it, `resizeterm()` is never called, and
   `Viewport` plus the help-bar row are fixed at construction. Any resize —
@@ -47,22 +47,17 @@ runs the four-phase tick. The reasoning behind the phase order, the snapshot
 walk, `environmentalFitness`, and the graze-versus-kill asymmetry now lives in
 `SimulationEngine.hpp` rather than here.
 
-## 02. `nutrient-cycle`
+## 02. `nutrient-cycle` — done
 
-Touches `Tile` (add `detritusLevel`), `SimulationEngine`, tests.
+Deaths deposit detritus on the tile in the cleanup phase, decomposers work
+detritus rather than corpses and mineralize part of it into `soilNutrientLevel`,
+and photosynthesis scales with the soil and draws it down. The rates are in
+`SimulationEngine.cpp` and the reasoning for each is on the constant.
 
-Death currently produces nothing that outlives the tick. `scavengeWithinReach`
-lets a decomposer eat a corpse, but only one standing next to it the moment it
-dies; the energy vanishes with the body otherwise. A dead organism should instead
-deposit detritus proportional to body mass (use its species' reproduction
-threshold as the stand-in); decomposers consume detritus and convert most of it
-to `soilNutrientLevel`, respiring the rest; plant photosynthesis scales with
-`soilNutrientLevel` and draws it down. Gives decomposers a reason to cost
-credits, and gives the corpse a persistence that does not depend on a decomposer
-happening to be in reach.
-
-Done when: a sealed plot with plants and no decomposers loses fertility and stops
-supporting plants, and adding decomposers recovers it.
+Two of them - the mineralization rate and the drawdown rate - are a matched pair
+set so a corpse roughly repays what that organism drew over a lifetime. That
+balance is the thing PR 03's sweep should check first, because it decides whether
+a closed plot trends fertile or barren over thousands of ticks.
 
 ## 03. `simulation-tuning-harness`
 
@@ -266,9 +261,9 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-02 → 03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then
-04 if the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 →
-24 → 25.
+03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if
+the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 →
+25.
 
 The one trap: 15 through 18 are cheap now and expensive later. Every panel built
 in Milestone B without a relayout hook and a glyph/color abstraction is a panel

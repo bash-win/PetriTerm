@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "petriterm/engine/RandomNumberGenerator.hpp"
@@ -49,7 +50,8 @@ struct TickReport {
 ///   2. Metabolism - every living organism burns its upkeep, ages, and counts
 ///      down its breeding cooldown. Starvation and old-age deaths land here.
 ///   3. Behavior - the survivors feed, move, and breed.
-///   4. Cleanup - the dead are removed and the census is taken.
+///   4. Cleanup - the dead become detritus on the tiles they fell on, are then
+///      removed, and the census is taken.
 ///
 /// Phases 2 and 3 each walk a snapshot of organism pointers taken at the start of
 /// the phase. Tiles own their organisms through unique_ptr, so moving one between
@@ -87,7 +89,7 @@ private:
     /// One member per tick phase, in the order advanceOneTick runs them.
     void applyMetabolismToEveryOrganism();
     void runBehaviorForEveryOrganism();
-    void removeDeadAndTakeCensus();
+    void convertDeadToDetritusAndTakeCensus();
 
     /// The behavior branch for each trophic role, selected by the organism's
     /// category. Each receives the fitness already computed for its tile.
@@ -100,9 +102,19 @@ private:
     /// killed outright. Returns true if the organism fed.
     bool grazeOrHuntWithinReach(organisms::Organism& organism, double fitness);
 
-    /// Feeds on the nearest reachable corpse. Corpses are cleared in phase 4, so
-    /// what a decomposer finds are the organisms that died earlier this tick.
-    bool scavengeWithinReach(organisms::Organism& organism, double fitness);
+    /// Works the detritus on the organism's own tile, moving to the nearest
+    /// reachable tile that holds some if its own is bare. Processing detritus both
+    /// feeds the decomposer and mineralizes part of what it processes into that
+    /// tile's soil, which is the only route by which anything replenishes
+    /// fertility. Returns true if the organism fed.
+    bool consumeDetritusWithinReach(organisms::Organism& organism, double fitness);
+
+    /// Returns the nearest reachable tile holding usable detritus, preferring the
+    /// seeker's own tile, or nullopt if none is in range. Ties at equal distance
+    /// are broken uniformly so a crowd of decomposers spreads over a kill field
+    /// instead of all funnelling to the same corner of it.
+    std::optional<world::TileCoordinate> findNearestDetritusWithinReach(
+        const organisms::Organism& seeker);
 
     /// Moves one tile to a random neighbor with room, and only sometimes, so a
     /// hungry population drifts instead of twitching every tick. Does nothing for

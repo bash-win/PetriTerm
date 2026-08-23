@@ -77,7 +77,8 @@ Species makeCarnivore() {
     return species;
 }
 
-/// A scavenger. Its diet stays empty: it works corpses, not the living.
+/// A scavenger. Its diet stays empty: it works the detritus a tile holds, not the
+/// living.
 Species makeDecomposer() {
     Species species = makePlant();
     species.speciesId = "test_beetle";
@@ -87,18 +88,30 @@ Species makeDecomposer() {
     return species;
 }
 
+/// Soil rich enough that photosynthesis runs at its full rate, so a test not
+/// concerned with the nutrient cycle sees feeding limited by climate alone.
+constexpr double kFullyFertileSoilNutrientLevel = 1.0;
+
+/// Soil well below the level that saturates photosynthesis, for tests that need
+/// room to watch fertility move in either direction.
+constexpr double kDepletedSoilNutrientLevel = 0.2;
+
 /// A world whose every tile sits at the given climate. Base values matter as much
 /// as current ones: the engine re-derives current climate from the base each tick,
-/// so a test that sets only the current values would see them overwritten.
+/// so a test that sets only the current values would see them overwritten. Soil
+/// defaults to fertile for the same reason: a bare-soil default would make every
+/// plant test a nutrient-cycle test by accident.
 WorldGrid makeUniformWorld(int widthInTiles, int heightInTiles,
                            double temperatureCelsius = kIdealTemperatureCelsius,
-                           double humidityPercent = kIdealHumidityPercent) {
+                           double humidityPercent = kIdealHumidityPercent,
+                           double soilNutrientLevel = kFullyFertileSoilNutrientLevel) {
     WorldGrid world(widthInTiles, heightInTiles);
     world.forEachTile([&](int, int, petriterm::world::Tile& tile) {
         tile.baseTemperatureCelsius = temperatureCelsius;
         tile.baseHumidityPercent = humidityPercent;
         tile.currentTemperatureCelsius = temperatureCelsius;
         tile.currentHumidityPercent = humidityPercent;
+        tile.soilNutrientLevel = soilNutrientLevel;
     });
     return world;
 }
@@ -313,7 +326,12 @@ TEST_CASE("births stop at the tile's carrying capacity", "[simulation]") {
 
     RandomNumberGenerator random(1);
     SimulationEngine simulation(std::move(world), random);
-    for (int tick = 0; tick < 50; ++tick) {
+    // Twenty ticks is four times the breeding cooldown, so every plant gets
+    // several blocked attempts. The horizon stops there because nothing dies back
+    // into this sealed tile, and past roughly twice that the four of them draw the
+    // soil down far enough to starve - which is the nutrient cycle working, and a
+    // separate test's business.
+    for (int tick = 0; tick < 20; ++tick) {
         REQUIRE(simulation.advanceOneTick().birthCount == 0);
     }
     REQUIRE(simulation.latestTickReport().totalLivingCount == 4);
@@ -373,10 +391,16 @@ TEST_CASE("a sessile species never leaves its tile", "[simulation]") {
 
     RandomNumberGenerator random(7);
     SimulationEngine simulation(std::move(world), random);
+    // Checked every tick rather than only at the end: the plant eventually
+    // exhausts this sealed tile's soil and starves, and a final-state assertion
+    // could not tell staying put from having died somewhere else.
     for (int tick = 0; tick < 200; ++tick) {
         simulation.advanceOneTick();
+        for (const Organism* organism : livingOrganisms(simulation.world())) {
+            REQUIRE(organism->tileColumnIndex == 2);
+            REQUIRE(organism->tileRowIndex == 2);
+        }
     }
-    REQUIRE(simulation.world().tileAt(2, 2).livingOrganismCount() == 1);
 }
 
 TEST_CASE("a carnivore kills its prey outright", "[simulation]") {
@@ -398,12 +422,16 @@ TEST_CASE("a carnivore kills its prey outright", "[simulation]") {
             Catch::Approx(24.0).margin(kSeasonalDriftMargin));
 }
 
-TEST_CASE("a decomposer feeds on a corpse left by this tick's deaths", "[simulation]") {
+TEST_CASE("a corpse becomes detritus a decomposer can work on a later tick",
+          "[simulation][nutrients]") {
     const Species plantSpecies = makePlant();
     const Species decomposerSpecies = makeDecomposer();
-    WorldGrid world = makeUniformWorld(3, 3);
+    // Poor soil, so mineralization has somewhere to go: on fully fertile ground it
+    // would be clamped at the ceiling and invisible.
+    WorldGrid world = makeUniformWorld(3, 3, kIdealTemperatureCelsius,
+                                       kIdealHumidityPercent, kDepletedSoilNutrientLevel);
     // One unit of energy left and one unit of upkeep, so it dies in the metabolism
-    // phase and is still lying there when the decomposer acts.
+    // phase of the very first tick.
     Organism& dying = placeOrganism(world, plantSpecies, 1, 1);
     dying.remainingEnergyUnits = 1.0;
     Organism& decomposer = placeOrganism(world, decomposerSpecies, 1, 1);
@@ -412,12 +440,27 @@ TEST_CASE("a decomposer feeds on a corpse left by this tick's deaths", "[simulat
     RandomNumberGenerator random(1);
     SimulationEngine simulation(std::move(world), random);
 
-    const TickReport& report = simulation.advanceOneTick();
-    REQUIRE(report.deathCount == 1);
-    REQUIRE(report.livingCountOf(OrganismCategory::Decomposer) == 1);
-    // Six to start, minus one upkeep, plus a five-unit meal off the corpse.
+    const TickReport& firstReport = simulation.advanceOneTick();
+    REQUIRE(firstReport.deathCount == 1);
+    REQUIRE(firstReport.livingCountOf(OrganismCategory::Decomposer) == 1);
+    // Detritus is deposited in the cleanup phase, after everything has acted, so
+    // the corpse is not food on the tick it falls. Half the plant's twelve-unit
+    // reproduction threshold stands in for its body mass.
+    REQUIRE(simulation.world().tileAt(1, 1).detritusLevel == Catch::Approx(6.0));
     REQUIRE(livingOrganisms(simulation.world()).front()->remainingEnergyUnits ==
-            Catch::Approx(10.0).margin(kSeasonalDriftMargin));
+            Catch::Approx(5.0).margin(kSeasonalDriftMargin));
+
+    const double soilBeforeDecomposition =
+        simulation.world().tileAt(1, 1).soilNutrientLevel;
+    simulation.advanceOneTick();
+    // Five units of appetite against six of detritus: the decomposer eats its
+    // fill, one unit is left in the ground, and part of what it processed is
+    // mineralized into the soil it is standing on.
+    REQUIRE(simulation.world().tileAt(1, 1).detritusLevel ==
+            Catch::Approx(1.0).margin(kSeasonalDriftMargin));
+    REQUIRE(livingOrganisms(simulation.world()).front()->remainingEnergyUnits ==
+            Catch::Approx(9.0).margin(kSeasonalDriftMargin));
+    REQUIRE(simulation.world().tileAt(1, 1).soilNutrientLevel > soilBeforeDecomposition);
 }
 
 TEST_CASE("the same seed reproduces the same run", "[simulation][determinism]") {
@@ -453,4 +496,154 @@ TEST_CASE("the same seed reproduces the same run", "[simulation][determinism]") 
 
     // A different seed has to actually diverge, or the test above proves nothing.
     REQUIRE(runTrajectory(99) != first);
+}
+
+TEST_CASE("photosynthesis scales with the soil a plant stands in",
+          "[simulation][nutrients]") {
+    const Species species = makePlant();
+
+    const auto energyAfterOneTickOnSoil = [&species](double soilNutrientLevel) {
+        WorldGrid world = makeUniformWorld(1, 1, kIdealTemperatureCelsius,
+                                           kIdealHumidityPercent, soilNutrientLevel);
+        Organism& plant = placeOrganism(world, species, 0, 0);
+        plant.remainingEnergyUnits = 6.0;
+        RandomNumberGenerator random(1);
+        SimulationEngine simulation(std::move(world), random);
+        simulation.advanceOneTick();
+        const std::vector<const Organism*> living = livingOrganisms(simulation.world());
+        return living.empty() ? 0.0 : living.front()->remainingEnergyUnits;
+    };
+
+    // Six to start, one of upkeep, then a four-unit yield scaled by the soil.
+    REQUIRE(energyAfterOneTickOnSoil(1.0) ==
+            Catch::Approx(9.0).margin(kSeasonalDriftMargin));
+    // Half the level that saturates photosynthesis, so half the yield.
+    REQUIRE(energyAfterOneTickOnSoil(0.25) ==
+            Catch::Approx(7.0).margin(kSeasonalDriftMargin));
+    // Dead soil grows nothing, so the plant only pays upkeep.
+    REQUIRE(energyAfterOneTickOnSoil(0.0) ==
+            Catch::Approx(5.0).margin(kSeasonalDriftMargin));
+}
+
+TEST_CASE("a sealed plot of plants exhausts its soil and stops supporting them",
+          "[simulation][nutrients]") {
+    const Species species = makePlant();
+    WorldGrid world = makeUniformWorld(1, 1);
+    placeOrganism(world, species, 0, 0);
+
+    RandomNumberGenerator random(4);
+    SimulationEngine simulation(std::move(world), random);
+
+    const double startingSoil = simulation.world().tileAt(0, 0).soilNutrientLevel;
+    for (int tick = 0; tick < 400; ++tick) {
+        simulation.advanceOneTick();
+    }
+
+    // Nothing returns matter to this tile but the plant's own death, and the plant
+    // draws on it every tick it grows, so fertility only ever falls.
+    REQUIRE(simulation.world().tileAt(0, 0).soilNutrientLevel < startingSoil);
+    REQUIRE(simulation.latestTickReport().livingCountOf(OrganismCategory::Plant) == 0);
+}
+
+TEST_CASE("decomposers recover a plot that has run its soil down",
+          "[simulation][nutrients]") {
+    const Species plantSpecies = makePlant();
+    const Species decomposerSpecies = makeDecomposer();
+
+    /// What a sealed plot looks like after the run: whether its plants are still
+    /// alive, and how much of its matter sits in soil rather than in detritus.
+    struct PlotOutcome {
+        int livingPlantCount = 0;
+        double totalSoilNutrientLevel = 0.0;
+        double totalDetritusLevel = 0.0;
+    };
+
+    /// Runs a plot of exhausted soil piled with dead matter, with decomposers
+    /// seeded or not. Both arms share a seed and are identical but for the
+    /// decomposers, so any difference between them is the decomposers' work.
+    const auto runPlot = [&](bool withDecomposers) {
+        constexpr int kPlotSizeInTiles = 4;
+        // Soil far below the level that saturates photosynthesis, so the plants
+        // cannot cover their own upkeep on it and need the cycle to restart.
+        constexpr double kExhaustedSoilNutrientLevel = 0.05;
+        // Dead matter left from whatever lived here before, enough to rebuild the
+        // soil if something works it and inert if nothing does.
+        constexpr double kStartingDetritusPerTile = 15.0;
+        constexpr double kStartingEnergyUnits = 10.0;
+
+        WorldGrid world =
+            makeUniformWorld(kPlotSizeInTiles, kPlotSizeInTiles, kIdealTemperatureCelsius,
+                             kIdealHumidityPercent, kExhaustedSoilNutrientLevel);
+        world.forEachTile([](int, int, petriterm::world::Tile& tile) {
+            tile.detritusLevel = kStartingDetritusPerTile;
+        });
+        for (int columnIndex = 0; columnIndex < kPlotSizeInTiles; ++columnIndex) {
+            for (int rowIndex = 0; rowIndex < kPlotSizeInTiles; ++rowIndex) {
+                placeOrganism(world, plantSpecies, columnIndex, rowIndex)
+                    .remainingEnergyUnits = kStartingEnergyUnits;
+                if (withDecomposers) {
+                    placeOrganism(world, decomposerSpecies, columnIndex, rowIndex)
+                        .remainingEnergyUnits = kStartingEnergyUnits;
+                }
+            }
+        }
+
+        RandomNumberGenerator random(11);
+        SimulationEngine simulation(std::move(world), random);
+        // Forty ticks sits inside the opening stretch of Clear weather, for the
+        // same reason the photosynthesis test above stops at fifty: past it a
+        // cold snap kills every plant on the plot regardless of the soil, which
+        // would mask the thing being measured.
+        for (int tick = 0; tick < 40; ++tick) {
+            simulation.advanceOneTick();
+        }
+
+        PlotOutcome outcome;
+        outcome.livingPlantCount =
+            simulation.latestTickReport().livingCountOf(OrganismCategory::Plant);
+        simulation.world().forEachTile(
+            [&outcome](int, int, const petriterm::world::Tile& tile) {
+                outcome.totalSoilNutrientLevel += tile.soilNutrientLevel;
+                outcome.totalDetritusLevel += tile.detritusLevel;
+            });
+        return outcome;
+    };
+
+    const PlotOutcome withoutDecomposers = runPlot(false);
+    const PlotOutcome withDecomposers = runPlot(true);
+
+    // Nothing works the detritus, so it just accumulates as the plants starve on
+    // soil none of it ever reaches.
+    REQUIRE(withoutDecomposers.livingPlantCount == 0);
+    REQUIRE(withoutDecomposers.totalDetritusLevel > 15.0 * 4 * 4);
+
+    // With decomposers the same matter is mineralized into the soil instead, and
+    // the plants that would otherwise have starved are all still standing.
+    REQUIRE(withDecomposers.livingPlantCount == 4 * 4);
+    REQUIRE(withDecomposers.totalSoilNutrientLevel >
+            10.0 * withoutDecomposers.totalSoilNutrientLevel);
+    REQUIRE(withDecomposers.totalDetritusLevel < withoutDecomposers.totalDetritusLevel);
+}
+
+TEST_CASE("detritus on one tile is capped", "[simulation][nutrients]") {
+    Species species = makePlant();
+    // A threshold high enough that a handful of corpses would blow past any
+    // plausible cap on their own.
+    species.traits.energyRequiredToReproduce = 400.0;
+    WorldGrid world = makeUniformWorld(1, 1);
+    for (int index = 0; index < 4; ++index) {
+        Organism& dying = placeOrganism(world, species, 0, 0);
+        dying.remainingEnergyUnits = 1.0;
+        // Dead soil, so nothing photosynthesizes its way out of starving.
+        dying.ticksUntilCanReproduce = 0;
+    }
+    world.tileAt(0, 0).soilNutrientLevel = 0.0;
+
+    RandomNumberGenerator random(1);
+    SimulationEngine simulation(std::move(world), random);
+    simulation.advanceOneTick();
+
+    REQUIRE(simulation.latestTickReport().deathCount == 4);
+    REQUIRE(simulation.world().tileAt(0, 0).detritusLevel <= 100.0);
+    REQUIRE(simulation.world().tileAt(0, 0).detritusLevel == Catch::Approx(100.0));
 }
