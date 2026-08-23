@@ -5,16 +5,18 @@ each sized to review on its own.
 
 ## Status
 
-Merged through PR #14. Engine (terminal, palette, renderer, text measure, input,
+Merged through PR #16. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
-climate), organisms (categories, traits, species, registry, `Organism`), game
-(viewport, placement). 102 tests. CI runs clang-format, clang-tidy, gcc, clang.
+climate), organisms (categories, traits, species, registry, `Organism`),
+simulation (`SimulationEngine` and its four-phase tick), game (viewport,
+placement). 116 tests. CI runs clang-format, clang-tidy, gcc, clang.
 
 ## What's actually broken or missing
 
-- Nothing simulates. `Organism::applyMetabolismAndAgingForOneTick()` is called
-  only by its own tests. `WorldViewScene::update()` advances weather and nothing
-  else, so organisms never eat, move, breed, or die.
+- Death feeds nothing back into the ground. A decomposer scavenges corpses in the
+  tick they die and that is the entire loop: there is no detritus, and
+  `Tile::soilNutrientLevel` is written once by `WorldGenerator` and never read
+  again, so nothing a plant grows on ever depletes or recovers. PR 02.
 - Eco-credits can only be spent, never earned. No objectives, no failure state.
 - Resize is decoded and dropped. `InputManager` maps `KEY_RESIZE` to
   `KeyCode::Resize`, but nothing handles it, `resizeterm()` is never called, and
@@ -38,67 +40,26 @@ climate), organisms (categories, traits, species, registry, `Organism`), game
 
 # Milestone A — Make it simulate
 
-Nothing downstream means much until this lands.
+## 01. `simulation-engine` — done, PR #16
 
-## 01. `simulation-engine`
-
-The central missing piece. `SimulationClock.hpp:63` already names it: the engine
-owns the authoritative tick index a save file records, as distinct from the
-clock's playback counter.
-
-New: `include/petriterm/simulation/SimulationEngine.hpp`,
-`src/simulation/SimulationEngine.cpp`, `tests/test_simulation_engine.cpp`.
-Touches: `Organism` (add `payReproductionCostAndResetCooldown()`),
-`CMakeLists.txt`, `main.cpp`.
-
-Design I settled on:
-
-- Engine owns the `WorldGrid` and the `ClimateSystem`, borrows the shared RNG.
-  The scene stops owning simulation state and renders `engine.world()`. Save/load
-  (PR 13) needs the engine to be the sole authority.
-- Four tick phases, and the order is the contract:
-  1. Climate — re-derive every tile's temperature and humidity so the whole tick
-     reads one consistent set of conditions.
-  2. Metabolism — upkeep, aging, breeding cooldown. Starvation and old-age deaths
-     land here.
-  3. Behavior — survivors feed, move, breed.
-  4. Cleanup — remove the dead, take the census.
-- Phases 2 and 3 each walk a snapshot of raw organism pointers taken at the start
-  of the phase. Tiles own organisms via `unique_ptr`, so moving one between tiles
-  keeps the pointee's address stable. This is what stops an organism that moves
-  mid-phase from acting twice, and stops one born this tick from acting on the
-  tick it appeared.
-- `environmentalFitness(traits, temperature, humidity)` → [0, 1]: 1.0 at the
-  ideal, falling linearly to 0.0 at the tolerance edge, the two axes multiplied so
-  being outside either one is fatal alone. Fitness scales feeding yield and gates
-  breeding instead of killing directly, so a badly placed organism starves over
-  several ticks and stays visible while it happens.
-- Plants get grazed, animals get killed. A herbivore takes part of a plant's
-  energy and the plant survives unless drained; a carnivore kills outright.
-  Without that asymmetry a handful of rabbits strips the map in a few dozen ticks.
-- `movementRangeInTiles` is reach, not stride: how far an organism finds and
-  strikes at prey. Nothing edible in reach means wander one tile. Document it,
-  because the trait name suggests otherwise.
-- Cap energy at a multiple of the species' reproduction threshold, or a well-fed
-  predator banks unbounded energy and goes immortal between meals.
-- Per-tile carrying capacity (`Tile::hasCapacityForCategory`, already written)
-  gates both births and moves.
-- `TickReport`: living counts by category, total, births, deaths, feedings. The
-  HUD and every later statistics feature read this.
-
-Done when: plants plus rabbits grow, plateau at carrying capacity, and crash when
-the weather turns. Two engines with the same seed and starting world produce
-identical trajectories over 1000 ticks.
+`SimulationEngine` owns the world and the climate, borrows the shared RNG, and
+runs the four-phase tick. The reasoning behind the phase order, the snapshot
+walk, `environmentalFitness`, and the graze-versus-kill asymmetry now lives in
+`SimulationEngine.hpp` rather than here.
 
 ## 02. `nutrient-cycle`
 
 Touches `Tile` (add `detritusLevel`), `SimulationEngine`, tests.
 
-Death currently produces nothing. A dead organism deposits detritus proportional
-to body mass (use its species' reproduction threshold as the stand-in);
-decomposers consume detritus and convert most of it to `soilNutrientLevel`,
-respiring the rest; plant photosynthesis scales with `soilNutrientLevel` and
-draws it down. Gives decomposers a reason to cost credits.
+Death currently produces nothing that outlives the tick. `scavengeWithinReach`
+lets a decomposer eat a corpse, but only one standing next to it the moment it
+dies; the energy vanishes with the body otherwise. A dead organism should instead
+deposit detritus proportional to body mass (use its species' reproduction
+threshold as the stand-in); decomposers consume detritus and convert most of it
+to `soilNutrientLevel`, respiring the rest; plant photosynthesis scales with
+`soilNutrientLevel` and draws it down. Gives decomposers a reason to cost
+credits, and gives the corpse a persistence that does not depend on a decomposer
+happening to be in reach.
 
 Done when: a sealed plot with plants and no decomposers loses fertility and stops
 supporting plants, and adding decomposers recovers it.
@@ -305,9 +266,9 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-01 → 02 → 03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11,
-then 04 if the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 →
-23 → 24 → 25.
+02 → 03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then
+04 if the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 →
+24 → 25.
 
 The one trap: 15 through 18 are cheap now and expensive later. Every panel built
 in Milestone B without a relayout hook and a glyph/color abstraction is a panel
