@@ -5,17 +5,19 @@ each sized to review on its own.
 
 ## Status
 
-Merged through PR #14. Engine (terminal, palette, renderer, text measure, input,
+Merged through PR #16. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
-climate), organisms (categories, traits, species, registry, `Organism`), game
-(viewport, placement). 102 tests. CI runs clang-format, clang-tidy, gcc, clang.
+climate), organisms (categories, traits, species, registry, `Organism`),
+simulation (`SimulationEngine`, its four-phase tick, and the nutrient cycle),
+game (viewport, placement). 120 tests. CI runs clang-format, clang-tidy, gcc,
+clang.
 
 ## What's actually broken or missing
 
-- Nothing simulates. `Organism::applyMetabolismAndAgingForOneTick()` is called
-  only by its own tests. `WorldViewScene::update()` advances weather and nothing
-  else, so organisms never eat, move, breed, or die.
 - Eco-credits can only be spent, never earned. No objectives, no failure state.
+- The nutrient cycle is simulated but invisible. Soil and detritus move every
+  tick and the HUD shows neither, so a plot going barren looks like plants dying
+  for no reason. PR 07 is where that readout belongs.
 - Resize is decoded and dropped. `InputManager` maps `KEY_RESIZE` to
   `KeyCode::Resize`, but nothing handles it, `resizeterm()` is never called, and
   `Viewport` plus the help-bar row are fixed at construction. Any resize —
@@ -26,8 +28,8 @@ climate), organisms (categories, traits, species, registry, `Organism`), game
 
 ## Checklist before opening any PR
 
-- clang-format and clang-tidy clean; no warnings under
-  `-Wall -Wextra -Wpedantic -Werror` on gcc and clang.
+- `scripts/check.sh` passes: clang-format, clang-tidy, the build under
+  `-Wall -Wextra -Wpedantic -Werror`, and the tests.
 - Catch2 coverage for new behavior. Split anything needing a live terminal so the
   pure logic tests without one, the way `decodeRawKeyRead` and `SimulationClock`
   already do.
@@ -38,70 +40,24 @@ climate), organisms (categories, traits, species, registry, `Organism`), game
 
 # Milestone A — Make it simulate
 
-Nothing downstream means much until this lands.
+## 01. `simulation-engine` — done, PR #16
 
-## 01. `simulation-engine`
+`SimulationEngine` owns the world and the climate, borrows the shared RNG, and
+runs the four-phase tick. The reasoning behind the phase order, the snapshot
+walk, `environmentalFitness`, and the graze-versus-kill asymmetry now lives in
+`SimulationEngine.hpp` rather than here.
 
-The central missing piece. `SimulationClock.hpp:63` already names it: the engine
-owns the authoritative tick index a save file records, as distinct from the
-clock's playback counter.
+## 02. `nutrient-cycle` — done
 
-New: `include/petriterm/simulation/SimulationEngine.hpp`,
-`src/simulation/SimulationEngine.cpp`, `tests/test_simulation_engine.cpp`.
-Touches: `Organism` (add `payReproductionCostAndResetCooldown()`),
-`CMakeLists.txt`, `main.cpp`.
+Deaths deposit detritus on the tile in the cleanup phase, decomposers work
+detritus rather than corpses and mineralize part of it into `soilNutrientLevel`,
+and photosynthesis scales with the soil and draws it down. The rates are in
+`SimulationEngine.cpp` and the reasoning for each is on the constant.
 
-Design I settled on:
-
-- Engine owns the `WorldGrid` and the `ClimateSystem`, borrows the shared RNG.
-  The scene stops owning simulation state and renders `engine.world()`. Save/load
-  (PR 13) needs the engine to be the sole authority.
-- Four tick phases, and the order is the contract:
-  1. Climate — re-derive every tile's temperature and humidity so the whole tick
-     reads one consistent set of conditions.
-  2. Metabolism — upkeep, aging, breeding cooldown. Starvation and old-age deaths
-     land here.
-  3. Behavior — survivors feed, move, breed.
-  4. Cleanup — remove the dead, take the census.
-- Phases 2 and 3 each walk a snapshot of raw organism pointers taken at the start
-  of the phase. Tiles own organisms via `unique_ptr`, so moving one between tiles
-  keeps the pointee's address stable. This is what stops an organism that moves
-  mid-phase from acting twice, and stops one born this tick from acting on the
-  tick it appeared.
-- `environmentalFitness(traits, temperature, humidity)` → [0, 1]: 1.0 at the
-  ideal, falling linearly to 0.0 at the tolerance edge, the two axes multiplied so
-  being outside either one is fatal alone. Fitness scales feeding yield and gates
-  breeding instead of killing directly, so a badly placed organism starves over
-  several ticks and stays visible while it happens.
-- Plants get grazed, animals get killed. A herbivore takes part of a plant's
-  energy and the plant survives unless drained; a carnivore kills outright.
-  Without that asymmetry a handful of rabbits strips the map in a few dozen ticks.
-- `movementRangeInTiles` is reach, not stride: how far an organism finds and
-  strikes at prey. Nothing edible in reach means wander one tile. Document it,
-  because the trait name suggests otherwise.
-- Cap energy at a multiple of the species' reproduction threshold, or a well-fed
-  predator banks unbounded energy and goes immortal between meals.
-- Per-tile carrying capacity (`Tile::hasCapacityForCategory`, already written)
-  gates both births and moves.
-- `TickReport`: living counts by category, total, births, deaths, feedings. The
-  HUD and every later statistics feature read this.
-
-Done when: plants plus rabbits grow, plateau at carrying capacity, and crash when
-the weather turns. Two engines with the same seed and starting world produce
-identical trajectories over 1000 ticks.
-
-## 02. `nutrient-cycle`
-
-Touches `Tile` (add `detritusLevel`), `SimulationEngine`, tests.
-
-Death currently produces nothing. A dead organism deposits detritus proportional
-to body mass (use its species' reproduction threshold as the stand-in);
-decomposers consume detritus and convert most of it to `soilNutrientLevel`,
-respiring the rest; plant photosynthesis scales with `soilNutrientLevel` and
-draws it down. Gives decomposers a reason to cost credits.
-
-Done when: a sealed plot with plants and no decomposers loses fertility and stops
-supporting plants, and adding decomposers recovers it.
+Two of them - the mineralization rate and the drawdown rate - are a matched pair
+set so a corpse roughly repays what that organism drew over a lifetime. That
+balance is the thing PR 03's sweep should check first, because it decides whether
+a closed plot trends fertile or barren over thousands of ticks.
 
 ## 03. `simulation-tuning-harness`
 
@@ -112,6 +68,17 @@ Balancing 18 species by watching a 30fps terminal will not converge. Headless
 runs make tuning empirical and turn "stable ecosystem" into a test: seeded runs
 asserting a starter ecosystem neither goes extinct nor explodes. Then do the
 balance pass on `data/species.txt` and the engine constants.
+
+The census dump wants soil and detritus totals alongside the population counts,
+not just the counts. Both of PR 02's failure modes — a plot going barren under
+plants that look healthy, and detritus piling up inert because the decomposers
+starved before anything died — are invisible in a population column and obvious
+in a fertility one.
+
+First thing to point it at is PR 02's mineralization and drawdown pair, which
+were set against short probe runs over a few hundred ticks. What they do over
+thousands, and whether a plot with a full food web on it trends fertile or
+barren, is still unmeasured.
 
 Done when: the starter scenario survives 5000 ticks across 10 seeds with all five
 trophic categories present.
@@ -305,10 +272,17 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-01 → 02 → 03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11,
-then 04 if the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 →
-23 → 24 → 25.
+03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if
+the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 →
+25.
 
-The one trap: 15 through 18 are cheap now and expensive later. Every panel built
-in Milestone B without a relayout hook and a glyph/color abstraction is a panel
-to retrofit with one.
+Two traps. 15 through 18 are cheap now and expensive later: every panel built in
+Milestone B without a relayout hook and a glyph/color abstraction is a panel to
+retrofit with one.
+
+And 03 should come before anything else that sets an ecology constant. It was
+listed after 02 and that was the wrong way round — 02's rates had to be picked
+against actual trajectories, so the harness got rebuilt as throwaway probes to
+finish the PR that was supposed to precede it. Any later PR that touches a rate
+(06's income curve, 10's disaster severities, the balance pass itself) has the
+same shape. Build the measuring tool first and use it.

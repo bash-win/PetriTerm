@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "petriterm/organisms/Species.hpp"
@@ -54,6 +55,59 @@ constexpr double kWanderProbabilityPerTick = 0.25;
 /// seeds and species data that the tuning milestone exists to do.
 constexpr double kMaximumGrazedFractionPerFeeding = 0.5;
 
+/// Share of its species' reproduction threshold that a corpse leaves behind as
+/// detritus. The threshold stands in for body mass, being the only trait that
+/// scales with how substantial a species is - a wolf is worth three times a
+/// lichen by it. Well under 1.0 because a corpse is not a full meal's worth of
+/// recoverable matter; the rest is treated as lost at death.
+constexpr double kDetritusPerReproductionThreshold = 0.5;
+
+/// Ceiling on one tile's detritus, in energy units. Roughly six of the largest
+/// corpses in species.txt. Without a cap, a killing field banks matter without
+/// limit and a single decomposer arriving much later feeds off it forever.
+constexpr double kMaximumDetritusPerTile = 100.0;
+
+/// Fertility added to a tile per energy unit of detritus a decomposer processes.
+/// This is already net of respiration: most of what is processed is lost as the
+/// decomposer breathes, and only this fraction is mineralized into soil the
+/// plants can draw on.
+///
+/// Paired with the drawdown rate below so that fully decomposing one corpse
+/// roughly repays what that organism drew from the soil over an average lifetime.
+/// Anything much less makes the cycle lossy enough that every closed plot trends
+/// barren no matter how many decomposers work it, which is not an ecology so much
+/// as a slow bug.
+///
+/// Provisional, like the grazing limit above: the pair sets the exchange rate
+/// between death and regrowth, and pinning it down properly needs PR 03's seed
+/// sweep rather than arithmetic on one species.
+constexpr double kSoilNutrientGainPerDetritusUnitProcessed = 0.2;
+
+/// Fertility at which photosynthesis runs at full rate. Below it, yield falls off
+/// linearly to nothing on dead soil. Deliberately under the grassland baseline of
+/// 0.7, so a temperate meadow starts unconstrained and only feels the soil once it
+/// has been worked for a while - while the desert baseline of 0.2 starts hungry.
+constexpr double kSoilNutrientLevelForFullPhotosynthesis = 0.5;
+
+/// Fertility a plant draws down per energy unit it photosynthesizes. The reason
+/// plants deplete their own tile at all: without it, soil only ever climbs and
+/// decomposers are decorative.
+///
+/// Sized against the mineralization rate above and the species file: a plant
+/// living out its two-hundred-odd ticks at one unit of upkeep draws on the order
+/// of what its own corpse puts back. That makes an undisturbed plot roughly
+/// break even when something works the detritus, and run down over a couple of
+/// hundred ticks when nothing does.
+constexpr double kSoilNutrientDrawnPerEnergyUnit = 0.006;
+
+/// Fertility ceiling. Soil is a normalized level, and the biome baselines it is
+/// seeded from all sit inside [0, 1].
+constexpr double kMaximumSoilNutrientLevel = 1.0;
+
+/// Detritus below this is treated as none at all, so a decomposer does not cross
+/// the map for a rounding error and tiles settle cleanly back to bare.
+constexpr double kMinimumUsableDetritus = 1e-6;
+
 /// Visits every in-bounds tile at exactly the given Chebyshev distance from the
 /// center, letting callers search outward one ring at a time. A radius of zero
 /// visits the center tile itself.
@@ -97,15 +151,31 @@ bool isHungry(const Organism& organism) {
     return energyCap <= 0.0 || organism.remainingEnergyUnits < energyCap;
 }
 
-/// Adds energy, stopping at the organism's ceiling.
-void addEnergyUpToCap(Organism& organism, double energyGained) {
+/// Adds energy, stopping at the organism's ceiling, and returns the amount
+/// actually taken up - less than what was offered when the cap truncates it.
+/// Callers billing a shared resource for a feeding have to charge for the uptake
+/// rather than the offer, or a sated organism keeps drawing its tile down for
+/// energy it never banks.
+double addEnergyUpToCap(Organism& organism, double energyGained) {
     const double energyCap = energyCapFor(organism);
     if (energyCap <= 0.0) {
         organism.remainingEnergyUnits += energyGained;
-        return;
+        return energyGained;
     }
-    organism.remainingEnergyUnits =
-        std::min(organism.remainingEnergyUnits + energyGained, energyCap);
+    const double energyBefore = organism.remainingEnergyUnits;
+    organism.remainingEnergyUnits = std::min(energyBefore + energyGained, energyCap);
+    return organism.remainingEnergyUnits - energyBefore;
+}
+
+/// How much of its full photosynthetic rate a plant achieves on the given soil,
+/// on [0, 1]. Linear up to the level that saturates it, so exhausted ground
+/// starves a plant gradually rather than switching it off - the same reason
+/// environmental fitness scales yield instead of killing outright.
+double photosynthesisFactorForSoil(double soilNutrientLevel) {
+    if (soilNutrientLevel <= 0.0) {
+        return 0.0;
+    }
+    return std::min(1.0, soilNutrientLevel / kSoilNutrientLevelForFullPhotosynthesis);
 }
 
 }
@@ -159,7 +229,7 @@ const TickReport& SimulationEngine::advanceOneTick() {
     climateSystem.advanceWeatherAndApplyToWorld(worldGrid);
     applyMetabolismToEveryOrganism();
     runBehaviorForEveryOrganism();
-    removeDeadAndTakeCensus();
+    convertDeadToDetritusAndTakeCensus();
     ++simulatedTickCount;
     return lastTickReport;
 }
@@ -215,12 +285,19 @@ void SimulationEngine::runBehaviorForEveryOrganism() {
 void SimulationEngine::actAsPlant(Organism& organism, double fitness) {
     // Photosynthesis: no prey to find and nowhere to go. Yield scales with
     // fitness, so a plant outside its band cannot cover its own upkeep and
-    // withers where it stands.
+    // withers where it stands, and with the soil it stands in, so a tile that has
+    // been grown on without anything dying back into it eventually supports
+    // nothing.
+    Tile& tile = worldGrid.tileAt(organism.tileColumnIndex, organism.tileRowIndex);
     if (isHungry(organism)) {
-        const double energyGained =
-            organism.species->traits.energyGainedPerFeeding * fitness;
+        const double energyGained = organism.species->traits.energyGainedPerFeeding *
+                                    fitness *
+                                    photosynthesisFactorForSoil(tile.soilNutrientLevel);
         if (energyGained > 0.0) {
-            addEnergyUpToCap(organism, energyGained);
+            const double energyTakenUp = addEnergyUpToCap(organism, energyGained);
+            tile.soilNutrientLevel =
+                std::max(0.0, tile.soilNutrientLevel -
+                                  energyTakenUp * kSoilNutrientDrawnPerEnergyUnit);
             ++lastTickReport.feedingCount;
         }
     }
@@ -233,7 +310,7 @@ void SimulationEngine::actAsPlant(Organism& organism, double fitness) {
 }
 
 void SimulationEngine::actAsDecomposer(Organism& organism, double fitness) {
-    if (!isHungry(organism) || !scavengeWithinReach(organism, fitness)) {
+    if (!isHungry(organism) || !consumeDetritusWithinReach(organism, fitness)) {
         wanderOneTile(organism);
     }
     tryReproduce(organism, fitness);
@@ -313,22 +390,61 @@ bool SimulationEngine::grazeOrHuntWithinReach(Organism& organism, double fitness
     return true;
 }
 
-bool SimulationEngine::scavengeWithinReach(Organism& organism, double fitness) {
-    Organism* corpse = findNearestTargetWithinReach(
-        organism, [](const Organism& candidate) { return !candidate.isAlive; });
-    if (corpse == nullptr) {
+bool SimulationEngine::consumeDetritusWithinReach(Organism& organism, double fitness) {
+    const std::optional<TileCoordinate> detritusTile =
+        findNearestDetritusWithinReach(organism);
+    if (!detritusTile.has_value()) {
         return false;
     }
-    const double energyGained = organism.species->traits.energyGainedPerFeeding * fitness;
-    if (energyGained <= 0.0) {
+
+    const double appetite = organism.species->traits.energyGainedPerFeeding * fitness;
+    if (appetite <= 0.0) {
         return false;
     }
-    // A corpse is not consumed, so several decomposers can work the same one in a
-    // tick. It is cleared in phase 4 regardless.
-    addEnergyUpToCap(organism, energyGained);
+
+    // Move onto the detritus before working it, so the organism is standing where
+    // it feeds and the tile it enriches is the tile it took the matter from. A
+    // full tile leaves it feeding at distance this tick and arriving later.
+    moveIfTileHasRoom(organism, detritusTile->columnIndex, detritusTile->rowIndex);
+
+    Tile& tile = worldGrid.tileAt(detritusTile->columnIndex, detritusTile->rowIndex);
+    // Unlike grazing, detritus is consumed: what one decomposer processes is gone
+    // for the next, which is what makes a crowd of them spread out.
+    // Billed on what the decomposer actually took up, not what it bit off, so a
+    // nearly-full one leaves the remainder in the ground for the next arrival
+    // instead of destroying it.
+    const double detritusOffered = std::min(appetite, tile.detritusLevel);
+    const double detritusProcessed = addEnergyUpToCap(organism, detritusOffered);
+    // Clamped rather than just subtracted: rounding on a tile worked down to its
+    // last fraction would otherwise leave a small negative behind, which reads as
+    // a debt the next decomposer has to fill before it can eat.
+    tile.detritusLevel = std::max(0.0, tile.detritusLevel - detritusProcessed);
+    tile.soilNutrientLevel =
+        std::min(kMaximumSoilNutrientLevel,
+                 tile.soilNutrientLevel +
+                     detritusProcessed * kSoilNutrientGainPerDetritusUnitProcessed);
     ++lastTickReport.feedingCount;
-    moveIfTileHasRoom(organism, corpse->tileColumnIndex, corpse->tileRowIndex);
     return true;
+}
+
+std::optional<TileCoordinate> SimulationEngine::findNearestDetritusWithinReach(
+    const Organism& seeker) {
+    const int reachInTiles = seeker.species->traits.movementRangeInTiles;
+    for (int radius = 0; radius <= reachInTiles; ++radius) {
+        tileCandidates.clear();
+        forEachTileAtChebyshevRadius(
+            worldGrid, seeker.tileColumnIndex, seeker.tileRowIndex, radius,
+            [this](int columnIndex, int rowIndex) {
+                if (worldGrid.tileAt(columnIndex, rowIndex).detritusLevel >
+                    kMinimumUsableDetritus) {
+                    tileCandidates.push_back(TileCoordinate{columnIndex, rowIndex});
+                }
+            });
+        if (!tileCandidates.empty()) {
+            return sharedRandom.pickUniformly(tileCandidates);
+        }
+    }
+    return std::nullopt;
 }
 
 void SimulationEngine::wanderOneTile(Organism& organism) {
@@ -416,9 +532,22 @@ void SimulationEngine::moveIfTileHasRoom(Organism& organism, int destinationColu
     destinationTile.occupyingOrganisms.push_back(std::move(transferred));
 }
 
-void SimulationEngine::removeDeadAndTakeCensus() {
+void SimulationEngine::convertDeadToDetritusAndTakeCensus() {
     worldGrid.forEachTile([this](int, int, Tile& tile) {
         auto& occupants = tile.occupyingOrganisms;
+
+        // Every death in the tick funnels through here - starvation, old age, and
+        // predation alike - so this is the one place body mass has to be banked.
+        for (const auto& occupant : occupants) {
+            if (!occupant->isAlive) {
+                tile.detritusLevel =
+                    std::min(kMaximumDetritusPerTile,
+                             tile.detritusLevel +
+                                 occupant->species->traits.energyRequiredToReproduce *
+                                     kDetritusPerReproductionThreshold);
+            }
+        }
+
         const auto firstDead = std::remove_if(
             occupants.begin(), occupants.end(),
             [](const std::unique_ptr<Organism>& occupant) { return !occupant->isAlive; });

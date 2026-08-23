@@ -20,7 +20,19 @@ struct Tile {
     double baseHumidityPercent = 0.0;
     double currentTemperatureCelsius = 0.0;
     double currentHumidityPercent = 0.0;
+
+    /// Fertility on [0, 1], seeded from the biome and thereafter drawn down by
+    /// photosynthesis and replenished by decomposition. Plants on exhausted soil
+    /// photosynthesize at a reduced rate, so this is what couples a tile's
+    /// history of death to what it can grow next.
     double soilNutrientLevel = 0.0;
+
+    /// Undecomposed dead matter waiting on this tile, in the same energy units
+    /// organisms carry. A corpse deposits its body mass here and is then removed,
+    /// so the energy in a death outlives the tick it happened in and remains
+    /// available to a decomposer that arrives later.
+    double detritusLevel = 0.0;
+
     double surfaceWaterLevel = 0.0;
     std::vector<std::unique_ptr<organisms::Organism>> occupyingOrganisms;
 
