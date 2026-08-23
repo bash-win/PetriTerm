@@ -28,8 +28,8 @@ clang.
 
 ## Checklist before opening any PR
 
-- clang-format and clang-tidy clean; no warnings under
-  `-Wall -Wextra -Wpedantic -Werror` on gcc and clang.
+- `scripts/check.sh` passes: clang-format, clang-tidy, the build under
+  `-Wall -Wextra -Wpedantic -Werror`, and the tests.
 - Catch2 coverage for new behavior. Split anything needing a live terminal so the
   pure logic tests without one, the way `decodeRawKeyRead` and `SimulationClock`
   already do.
@@ -68,6 +68,17 @@ Balancing 18 species by watching a 30fps terminal will not converge. Headless
 runs make tuning empirical and turn "stable ecosystem" into a test: seeded runs
 asserting a starter ecosystem neither goes extinct nor explodes. Then do the
 balance pass on `data/species.txt` and the engine constants.
+
+The census dump wants soil and detritus totals alongside the population counts,
+not just the counts. Both of PR 02's failure modes — a plot going barren under
+plants that look healthy, and detritus piling up inert because the decomposers
+starved before anything died — are invisible in a population column and obvious
+in a fertility one.
+
+First thing to point it at is PR 02's mineralization and drawdown pair, which
+were set against short probe runs over a few hundred ticks. What they do over
+thousands, and whether a plot with a full food web on it trends fertile or
+barren, is still unmeasured.
 
 Done when: the starter scenario survives 5000 ticks across 10 seeds with all five
 trophic categories present.
@@ -265,6 +276,13 @@ because it will surface every remaining ncurses assumption in the engine.
 the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 →
 25.
 
-The one trap: 15 through 18 are cheap now and expensive later. Every panel built
-in Milestone B without a relayout hook and a glyph/color abstraction is a panel
-to retrofit with one.
+Two traps. 15 through 18 are cheap now and expensive later: every panel built in
+Milestone B without a relayout hook and a glyph/color abstraction is a panel to
+retrofit with one.
+
+And 03 should come before anything else that sets an ecology constant. It was
+listed after 02 and that was the wrong way round — 02's rates had to be picked
+against actual trajectories, so the harness got rebuilt as throwaway probes to
+finish the PR that was supposed to precede it. Any later PR that touches a rate
+(06's income curve, 10's disaster severities, the balance pass itself) has the
+same shape. Build the measuring tool first and use it.
