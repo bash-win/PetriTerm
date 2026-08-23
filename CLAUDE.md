@@ -19,9 +19,13 @@ cmake --build build -j
 ./build/petriterm             # needs a terminal at least 80x24
 ```
 
-CI runs `clang-format --dry-run --Werror`, `clang-tidy -p build`, and gcc + clang
-builds. Run those locally before pushing; `-Wall -Wextra -Wpedantic -Werror` is
-on, so a warning is a build failure.
+`scripts/check.sh` runs everything CI runs, in CI's order: clang-format,
+clang-tidy, the build, and the tests. Run it before pushing rather than
+reassembling the individual commands, and `--skip-tidy` while iterating.
+`-Wall -Wextra -Wpedantic -Werror` is on, so a warning is a build failure.
+
+CI additionally builds the matrix under both gcc and clang. Mirror the other arm
+with `CXX=clang++ BUILD_DIRECTORY=build-clang scripts/check.sh`.
 
 ## Layout
 
