@@ -37,8 +37,12 @@ add_library(petriterm_core STATIC
     src/organisms/SpeciesRegistry.cpp
     src/organisms/Organism.cpp
     src/simulation/SimulationEngine.cpp
+    src/simulation/EcosystemCensus.cpp
     src/game/Viewport.cpp
     src/game/PlacementController.cpp
+    src/game/StarterEcosystem.cpp
+    src/game/CommandLineOptions.cpp
+    src/game/HeadlessRun.cpp
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

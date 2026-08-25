@@ -18,11 +18,14 @@
 #include "petriterm/engine/SceneManager.hpp"
 #include "petriterm/engine/SimulationClock.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
+#include "petriterm/game/CommandLineOptions.hpp"
+#include "petriterm/game/HeadlessRun.hpp"
 #include "petriterm/game/PlacementController.hpp"
 #include "petriterm/game/Viewport.hpp"
 #include "petriterm/organisms/Organism.hpp"
 #include "petriterm/organisms/Species.hpp"
 #include "petriterm/organisms/SpeciesRegistry.hpp"
+#include "petriterm/simulation/EcosystemCensus.hpp"
 #include "petriterm/simulation/SimulationEngine.hpp"
 #include "petriterm/world/Biome.hpp"
 #include "petriterm/world/ClimateSystem.hpp"
@@ -33,13 +36,21 @@ namespace {
 
 using namespace petriterm::engine;
 using petriterm::engine::SimulationClock;
+using petriterm::game::CommandLineOptions;
+using petriterm::game::commandLineUsageText;
+using petriterm::game::HeadlessRunSettings;
+using petriterm::game::parseCommandLineOptions;
 using petriterm::game::PlacementController;
+using petriterm::game::runHeadlessSimulation;
 using petriterm::game::ScreenCell;
 using petriterm::game::Viewport;
 using petriterm::organisms::Organism;
 using petriterm::organisms::OrganismCategory;
 using petriterm::organisms::Species;
 using petriterm::organisms::SpeciesRegistry;
+using petriterm::simulation::censusCsvHeader;
+using petriterm::simulation::EcosystemCensus;
+using petriterm::simulation::formatCensusAsCsvRow;
 using petriterm::simulation::SimulationEngine;
 using petriterm::simulation::TickReport;
 using petriterm::world::BiomeDescriptor;
@@ -316,13 +327,52 @@ private:
     Viewport viewport;
 };
 
+/// Runs the simulation without a terminal, writing the census to stdout as CSV.
+///
+/// Kept out of the interactive path entirely rather than sharing a scene: nothing
+/// here constructs a TerminalWindow, so this works over a pipe, in CI, and with no
+/// TERM set at all. Writes with fputs rather than iostreams to match the error
+/// reporting already in this file.
+void runHeadlessAndPrintCensus(const CommandLineOptions& options,
+                               const SpeciesRegistry& speciesRegistry) {
+    HeadlessRunSettings settings;
+    settings.worldSeed = options.worldSeed;
+    settings.ticksToRun = options.ticksToRun;
+    settings.censusIntervalInTicks = options.censusIntervalInTicks;
+
+    std::fputs(censusCsvHeader().c_str(), stdout);
+    std::fputc('\n', stdout);
+    runHeadlessSimulation(settings, speciesRegistry.allSpecies(),
+                          [](const EcosystemCensus& census) {
+                              std::fputs(formatCensusAsCsvRow(census).c_str(), stdout);
+                              std::fputc('\n', stdout);
+                          });
 }
 
-int main() {
+}
+
+int main(int argumentCount, char** argumentValues) {
+    const CommandLineOptions options =
+        parseCommandLineOptions(argumentCount, argumentValues);
+    if (options.hasError()) {
+        std::fprintf(stderr, "petriterm: %s\n", options.errorMessage.c_str());
+        std::fprintf(stderr, "Try 'petriterm --help'.\n");
+        return 2;
+    }
+    if (options.showHelp) {
+        std::fputs(commandLineUsageText().c_str(), stdout);
+        return 0;
+    }
+
     std::setlocale(LC_ALL, "");
     try {
         SpeciesRegistry speciesRegistry;
         speciesRegistry.loadFromFile(locateSpeciesFile());
+
+        if (options.runHeadless) {
+            runHeadlessAndPrintCensus(options, speciesRegistry);
+            return 0;
+        }
 
         petriterm::engine::TerminalWindow terminal;
         petriterm::engine::ColorPalette palette;

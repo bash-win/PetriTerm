@@ -8,12 +8,16 @@ each sized to review on its own.
 Merged through PR #16. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
 climate), organisms (categories, traits, species, registry, `Organism`),
-simulation (`SimulationEngine`, its four-phase tick, and the nutrient cycle),
-game (viewport, placement). 120 tests. CI runs clang-format, clang-tidy, gcc,
-clang.
+simulation (`SimulationEngine`, its four-phase tick, the nutrient cycle, and the
+census), game (viewport, placement, starter ecosystem, headless runs). 138 tests.
+CI runs clang-format, clang-tidy, gcc, clang.
 
 ## What's actually broken or missing
 
+- The food web collapses to plants and decomposers. Carnivores, herbivores, and
+  omnivores die out within a few hundred ticks of every seeded start, so three of
+  the five trophic levels do not currently persist at all. Measured, not guessed;
+  the numbers are under PR 03b.
 - Eco-credits can only be spent, never earned. No objectives, no failure state.
 - The nutrient cycle is simulated but invisible. Soil and detritus move every
   tick and the HUD shows neither, so a plot going barren looks like plants dying
@@ -59,26 +63,54 @@ set so a corpse roughly repays what that organism drew over a lifetime. That
 balance is the thing PR 03's sweep should check first, because it decides whether
 a closed plot trends fertile or barren over thousands of ticks.
 
-## 03. `simulation-tuning-harness`
+## 03. `simulation-tuning-harness` — done
 
-New: `--headless --ticks N --seed S` printing the census as CSV without a
-terminal; `tests/test_ecosystem_soak.cpp`.
+`--headless --ticks N --seed S --census-every N` runs the simulation with no
+terminal and writes the census to stdout as CSV: populations by category, births,
+deaths, feedings, mean soil, mean detritus, mean temperature, season, and weather.
+`StarterEcosystem` stocks a world with a trophic pyramid, `HeadlessRun` drives it
+and hands each sample to a callback, and `CommandLineOptions` parses the flags.
 
-Balancing 18 species by watching a 30fps terminal will not converge. Headless
-runs make tuning empirical and turn "stable ecosystem" into a test: seeded runs
-asserting a starter ecosystem neither goes extinct nor explodes. Then do the
-balance pass on `data/species.txt` and the engine constants.
+The climate columns were not in the original plan and turned out to be the ones
+that mattered. A population crash looks identical whether the food web failed on
+its own terms or a heatwave put the whole map outside every tolerance band at
+once, and only the weather column tells them apart.
 
-The census dump wants soil and detritus totals alongside the population counts,
-not just the counts. Both of PR 02's failure modes — a plot going barren under
-plants that look healthy, and detritus piling up inert because the decomposers
-starved before anything died — are invisible in a population column and obvious
-in a fertility one.
+The balance pass this was built for is 03b. The measurements it produced are
+recorded there rather than here.
 
-First thing to point it at is PR 02's mineralization and drawdown pair, which
-were set against short probe runs over a few hundred ticks. What they do over
-thousands, and whether a plot with a full food web on it trends fertile or
-barren, is still unmeasured.
+## 03b. `ecosystem-balance-pass`
+
+Touches `data/species.txt`, the engine's tuning constants, and
+`StarterDensityPerHundredTiles`. New: `tests/test_ecosystem_soak.cpp`.
+
+What the harness measured, across seeds 1, 7, 42, and 99 — the same failures
+every time, so none of this is one unlucky world:
+
+- **Carnivores never eat once.** Zero of them alive by tick 20 in every seed.
+  With predators seeded at 0.25 per hundred tiles and herbivores thinning to
+  roughly one per 450 tiles, a hunter with `moveRange` 3 sees 49 tiles and starves
+  at 3 energy a tick before it ever finds prey. Either prey density, hunter reach,
+  or the wander walk has to change; a predator that cannot find food is not a
+  balance problem so much as a search problem.
+- **Herbivores starve surrounded by plants**, gone by tick 140 with 1,315 of them
+  on the map. This is the trade-off already flagged on
+  `kMaximumGrazedFractionPerFeeding`: half of a seedling's energy is not a meal.
+- **Omnivores go the same way as the herbivores**, and for the same reason.
+- **Weather is a mass-casualty event.** Seed 42 loses plants 2730 → 613 to a
+  heatwave at tick 140, 3576 → 1224 to a cold snap at tick 300, and the rest to a
+  second heatwave at 400. A pattern shifts temperature by around 11°C against
+  tolerance bands of ±7 to ±16, so one event can put most of the map outside every
+  species' range at the same moment. Worth deciding whether the fix is smaller
+  weather offsets, wider bands, or a gentler fitness curve — fitness multiplies
+  two linear falloffs and gates feeding and breeding both, which is what makes an
+  event this sharp.
+- **Plants then boom-bust with nothing grazing them**: seed 1 reached 10,109 and
+  was still climbing at tick 600, seed 42 crashed to zero.
+- **The nutrient cycle is not implicated.** Mean soil held between 0.59 and 0.90
+  in every run and detritus turned over the whole time, so PR 02's mineralization
+  and drawdown pair can be left alone. That question is settled; it was the one
+  thing this was most expected to catch.
 
 Done when: the starter scenario survives 5000 ticks across 10 seeds with all five
 trophic categories present.
@@ -272,9 +304,14 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-03, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if
+03b, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if
 the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 →
 25.
+
+03b is lettered rather than numbered because the balance pass turned out to be a
+PR of its own rather than the tail of the harness, and renumbering everything
+below it would break the correspondence between these numbers and the branch
+names already merged.
 
 Two traps. 15 through 18 are cheap now and expensive later: every panel built in
 Milestone B without a relayout hook and a glyph/color abstraction is a panel to
