@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <vector>
 
@@ -17,8 +16,9 @@ namespace petriterm::simulation {
 
 /// How well a species' traits suit the climate it is standing in, on [0, 1]: 1.0
 /// at its ideal temperature and humidity, falling linearly to 0.0 at the edge of
-/// its tolerance band and staying there beyond it. The two axes are multiplied, so
-/// being outside either one alone is enough to yield nothing.
+/// its tolerance band and staying there beyond it. The two axes are combined as a
+/// geometric mean, so being outside either one alone is enough to yield nothing
+/// while being merely off-ideal on both is not compounded into near-zero.
 ///
 /// Fitness scales feeding yield and gates breeding rather than killing directly,
 /// so a badly placed organism starves over several ticks instead of vanishing.
@@ -97,9 +97,10 @@ private:
     void actAsDecomposer(organisms::Organism& organism, double fitness);
     void actAsConsumer(organisms::Organism& organism, double fitness);
 
-    /// Eats the nearest reachable prey the organism's diet allows. Plants are
-    /// grazed for part of their energy and survive unless drained; animal prey is
-    /// killed outright. Returns true if the organism fed.
+    /// Eats the reachable prey the organism's diet picks out. Plants are cropped
+    /// down towards their root stock and left standing; animal prey is killed
+    /// outright, because a predator that only wounded its target could never cover
+    /// its upkeep at these energy costs. Returns true if the organism fed.
     bool grazeOrHuntWithinReach(organisms::Organism& organism, double fitness);
 
     /// Works the detritus on the organism's own tile, moving to the nearest
@@ -125,13 +126,28 @@ private:
     /// charging the parent its species' reproduction cost. Returns true on a birth.
     bool tryReproduce(organisms::Organism& parent, double fitness);
 
-    /// Returns a uniformly chosen organism satisfying the predicate at the
-    /// smallest Chebyshev distance within the seeker's reach, or nullptr if none
-    /// is in range. Searching outward one ring at a time means an organism always
-    /// takes the nearest food rather than any food in range.
-    organisms::Organism* findNearestTargetWithinReach(
-        const organisms::Organism& seeker,
-        const std::function<bool(const organisms::Organism&)>& isTarget);
+    /// Returns true if the organism has enough room clear of its own kind to breed.
+    /// Always true for the categories that hold no territory, which is all of them
+    /// but the hunters - see the territory radius in the source for why the top of
+    /// the web is the level that needs a brake of its own.
+    bool hasBreedingTerritory(const organisms::Organism& parent);
+
+    /// Returns the prey the seeker would go for: searching outward one ring at a
+    /// time, and within a ring preferring the category its diet lists earliest,
+    /// chosen uniformly among equals. Returns nullptr if nothing edible is in reach.
+    ///
+    /// Distance outranks preference deliberately, and the two orderings pull in
+    /// opposite directions often enough that which one wins decides whether the
+    /// simulation is stable. Letting preference win - searching the whole reach for
+    /// the favourite category before considering the next - means a predator hunts
+    /// its preferred prey hardest exactly when that prey has become rare, which is
+    /// the opposite of what stops a population being hunted to nothing. Ranking
+    /// within a ring instead makes a predator take what it actually encounters, so
+    /// pressure moves off a prey species as it thins out and onto whatever has
+    /// replaced it, while an omnivore standing in a meadow still grazes rather than
+    /// chasing the rabbit beside it.
+    organisms::Organism* findNearestPreferredPreyWithinReach(
+        const organisms::Organism& seeker);
 
     /// Transfers ownership of the organism to the given tile and updates its
     /// stored coordinates, if that tile exists and has room for its category.

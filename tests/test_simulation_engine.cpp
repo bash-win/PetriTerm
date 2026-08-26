@@ -1,3 +1,4 @@
+#include <cmath>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -155,16 +156,33 @@ TEST_CASE("fitness peaks at the ideal climate and vanishes outside tolerance",
                                      kIdealHumidityPercent) == Catch::Approx(1.0));
     }
 
-    SECTION("halfway out on one axis scales that axis only") {
+    SECTION("halfway out on one axis is softened by the other still being ideal") {
+        // The geometric mean of 0.5 and 1.0. Both directions, since the falloff is
+        // on the distance from the ideal rather than the side of it.
         REQUIRE(environmentalFitness(species.traits, kIdealTemperatureCelsius + 5.0,
-                                     kIdealHumidityPercent) == Catch::Approx(0.5));
+                                     kIdealHumidityPercent) ==
+                Catch::Approx(std::sqrt(0.5)));
         REQUIRE(environmentalFitness(species.traits, kIdealTemperatureCelsius - 5.0,
-                                     kIdealHumidityPercent) == Catch::Approx(0.5));
+                                     kIdealHumidityPercent) ==
+                Catch::Approx(std::sqrt(0.5)));
     }
 
-    SECTION("the two axes multiply") {
+    SECTION("the two axes combine as a mean rather than compounding") {
+        // Half-suited on both axes is half-suited overall, not quarter-suited. The
+        // product this used to be charged a species twice for one bad tile, and a
+        // weather pattern moves both axes at once, so the difference is the
+        // difference between weather that stresses a map and weather that clears it.
         REQUIRE(environmentalFitness(species.traits, kIdealTemperatureCelsius + 5.0,
-                                     kIdealHumidityPercent + 10.0) == Catch::Approx(0.25));
+                                     kIdealHumidityPercent + 10.0) == Catch::Approx(0.5));
+    }
+
+    SECTION("outside either band alone is enough to yield nothing") {
+        // The property the mean has to keep: a species does not get to live in the
+        // wrong climate on the strength of the other axis being perfect.
+        REQUIRE(environmentalFitness(species.traits, kIdealTemperatureCelsius + 20.0,
+                                     kIdealHumidityPercent) == Catch::Approx(0.0));
+        REQUIRE(environmentalFitness(species.traits, kIdealTemperatureCelsius,
+                                     kIdealHumidityPercent + 40.0) == Catch::Approx(0.0));
     }
 
     SECTION("at or beyond the tolerance edge nothing is left") {
@@ -420,6 +438,51 @@ TEST_CASE("a carnivore kills its prey outright", "[simulation]") {
     // Ten to start, minus two upkeep, plus a sixteen-unit meal.
     REQUIRE(livingOrganisms(simulation.world()).front()->remainingEnergyUnits ==
             Catch::Approx(24.0).margin(kSeasonalDriftMargin));
+}
+
+TEST_CASE("a carnivore will not breed within another's territory", "[simulation]") {
+    // The brake on the top of the food web. Nothing preys on a carnivore, so
+    // without this its numbers answer only to prey, and they answer late enough
+    // that the predators breed straight through a crash of the thing they eat.
+    Species carnivoreSpecies = makeCarnivore();
+    carnivoreSpecies.traits.reproductionCooldownTicks = 0;
+
+    const auto birthsWithNeighbourAt = [&carnivoreSpecies](int neighbourColumnIndex) {
+        WorldGrid world = makeUniformWorld(9, 3);
+        Organism& parent = placeOrganism(world, carnivoreSpecies, 4, 1);
+        parent.remainingEnergyUnits =
+            carnivoreSpecies.traits.energyRequiredToReproduce * 2.0;
+        if (neighbourColumnIndex >= 0) {
+            placeOrganism(world, carnivoreSpecies, neighbourColumnIndex, 1);
+        }
+        RandomNumberGenerator random(1);
+        SimulationEngine simulation(std::move(world), random);
+        return simulation.advanceOneTick().birthCount;
+    };
+
+    // Alone, it breeds. With a rival on the adjoining tile, it does not. Two tiles
+    // away is outside the territory and lets it breed again, which is what makes
+    // this a limit that eases as the population thins rather than a flat cap.
+    REQUIRE(birthsWithNeighbourAt(-1) == 1);
+    REQUIRE(birthsWithNeighbourAt(5) == 0);
+    REQUIRE(birthsWithNeighbourAt(6) >= 1);
+}
+
+TEST_CASE("a grazer breeds shoulder to shoulder with its own kind", "[simulation]") {
+    // Territory is deliberately the hunters' alone: a herd is the herbivore's
+    // answer to being eaten, and giving the grazers territory too would take that
+    // away at exactly the moment they need it.
+    Species herbivoreSpecies = makeHerbivore();
+    herbivoreSpecies.traits.reproductionCooldownTicks = 0;
+
+    WorldGrid world = makeUniformWorld(5, 3);
+    Organism& parent = placeOrganism(world, herbivoreSpecies, 2, 1);
+    parent.remainingEnergyUnits = herbivoreSpecies.traits.energyRequiredToReproduce * 2.0;
+    placeOrganism(world, herbivoreSpecies, 3, 1);
+
+    RandomNumberGenerator random(1);
+    SimulationEngine simulation(std::move(world), random);
+    REQUIRE(simulation.advanceOneTick().birthCount >= 1);
 }
 
 TEST_CASE("a corpse becomes detritus a decomposer can work on a later tick",

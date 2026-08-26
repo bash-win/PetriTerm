@@ -58,13 +58,24 @@ target_link_libraries(petriterm_core PUBLIC
 add_executable(petriterm src/main.cpp)
 target_link_libraries(petriterm PRIVATE petriterm_core)
 
+# Keyed on the file rather than attached to the petriterm target as a POST_BUILD
+# step, which is what this was. POST_BUILD only runs when the target relinks, so
+# editing species.txt and nothing else left the old copy sitting beside the binary
+# and the build reporting success - which silently invalidates exactly the workflow
+# the file exists for, since tuning a species is the one change that touches no
+# source. Depending on the file makes the copy a build input like any other.
 set(PETRITERM_SPECIES_FILE ${CMAKE_CURRENT_SOURCE_DIR}/data/species.txt)
 if(EXISTS ${PETRITERM_SPECIES_FILE})
-    add_custom_command(TARGET petriterm POST_BUILD
+    set(PETRITERM_SPECIES_FILE_COPY ${CMAKE_CURRENT_BINARY_DIR}/species.txt)
+    add_custom_command(
+        OUTPUT ${PETRITERM_SPECIES_FILE_COPY}
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${PETRITERM_SPECIES_FILE}
-            $<TARGET_FILE_DIR:petriterm>/species.txt
+            ${PETRITERM_SPECIES_FILE_COPY}
+        DEPENDS ${PETRITERM_SPECIES_FILE}
         COMMENT "Copying species.txt next to the petriterm binary")
+    add_custom_target(petriterm_species_file DEPENDS ${PETRITERM_SPECIES_FILE_COPY})
+    add_dependencies(petriterm petriterm_species_file)
 endif()
 
 file(GLOB PETRITERM_TEST_SOURCES CONFIGURE_DEPENDS

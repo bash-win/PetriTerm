@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 
 #include "petriterm/organisms/Species.hpp"
@@ -36,12 +38,31 @@ constexpr double kMinimumToleranceRange = 1e-6;
 /// which reads on screen as a bug rather than as ecology.
 constexpr double kMinimumFitnessToReproduce = 0.15;
 
+/// Share of its energy ceiling at which an animal stops looking for food, as
+/// distinct from the ceiling itself, which is only where it stops being able to
+/// store any.
+///
+/// This is what sets the rate at which a predator kills, and nothing else does. A
+/// hunter that forages whenever it has room to store more forages every tick of its
+/// life, and takes a prey animal on most of them - at which point the seeded
+/// herbivores are gone inside ten ticks, long before they can breed, and the
+/// predators starve a couple of hundred ticks later with the top two trophic levels
+/// already lost. Measured, not reasoned: 129 herbivores down to 5 by tick 11.
+///
+/// A fed animal ignoring food turns one meal into several ticks of not hunting,
+/// which is the whole predator-prey cycle. Above 0.5 because the ceiling is twice
+/// the reproduction threshold, so anything lower would satiate an animal below the
+/// energy it needs to breed and leave breeding dependent on overshooting the
+/// threshold on a final mouthful.
+constexpr double kForagingSatiationFractionOfEnergyCap = 0.75;
+
 /// Chance per tick that an organism with nothing edible in reach moves one tile.
 /// Well below 1.0 so a hungry population drifts across the map instead of
 /// twitching every tick.
 constexpr double kWanderProbabilityPerTick = 0.25;
 
-/// The largest share of a grazed plant's remaining energy one feeding can strip.
+/// Standing growth a graze has to leave on the plant, as a share of its species'
+/// reproduction threshold - the root stock a browsed plant regrows from.
 ///
 /// Some limit here is load-bearing. A herbivore feeds on every tick it is hungry,
 /// and its breeding cooldown is far shorter than the time a plant needs to grow,
@@ -49,11 +70,17 @@ constexpr double kWanderProbabilityPerTick = 0.25;
 /// strip a seeded world bare inside a couple of hundred ticks - after which the
 /// herbivores starve too, and nothing is left alive.
 ///
-/// This particular value is provisional. It buys a world that lives, but it also
-/// makes a mouthful off a seedling so small that herbivores cannot hold a
-/// population for long. Landing that trade-off properly needs the sweep across
-/// seeds and species data that the tuning milestone exists to do.
-constexpr double kMaximumGrazedFractionPerFeeding = 0.5;
+/// A floor rather than the fraction of remaining energy this used to be. The
+/// fraction scaled the wrong way round: it made a mature plant an easy meal and a
+/// seedling a mouthful too small to live on, so herbivores starved in the middle of
+/// a meadow. A floor makes maturity the thing that matters - a grown plant feeds a
+/// grazer outright, a seedling is passed over and survives to grow - and regulates
+/// the herd through the plant's *reproduction* rather than its death, because
+/// grazed-down growth sits below the threshold to seed. Set under 1.0 so a plant
+/// held at the floor is also held below breeding, and above zero so grazing alone
+/// never kills; overgrazed plants still die, but through failing to cover their own
+/// upkeep on poor ground, which is the honest way for it to happen.
+constexpr double kGrazingLeavesFractionOfReproductionThreshold = 0.4;
 
 /// Share of its species' reproduction threshold that a corpse leaves behind as
 /// detritus. The threshold stands in for body mass, being the only trait that
@@ -151,6 +178,16 @@ bool isHungry(const Organism& organism) {
     return energyCap <= 0.0 || organism.remainingEnergyUnits < energyCap;
 }
 
+/// Returns true if the animal is hungry enough to go looking for food. Applies to
+/// the mobile feeders only: a plant cannot decline to photosynthesize, and a
+/// decomposer working the ground it stands on takes nothing from anything that
+/// would otherwise have bred.
+bool isBelowForagingSatiation(const Organism& organism) {
+    const double energyCap = energyCapFor(organism);
+    return energyCap <= 0.0 || organism.remainingEnergyUnits <
+                                   energyCap * kForagingSatiationFractionOfEnergyCap;
+}
+
 /// Adds energy, stopping at the organism's ceiling, and returns the amount
 /// actually taken up - less than what was offered when the cap truncates it.
 /// Callers billing a shared resource for a feeding have to charge for the uptake
@@ -165,6 +202,52 @@ double addEnergyUpToCap(Organism& organism, double energyGained) {
     const double energyBefore = organism.remainingEnergyUnits;
     organism.remainingEnergyUnits = std::min(energyBefore + energyGained, energyCap);
     return organism.remainingEnergyUnits - energyBefore;
+}
+
+/// Energy a graze could take off the given plant, which is whatever it has grown
+/// above the root stock a browser has to leave behind. Zero for a seedling.
+///
+/// A free function because the hunt has to consult it too: picking the nearest
+/// edible thing and only then finding it has nothing to offer left herbivores
+/// wandering away from a meadow because the one plant beside them was too young.
+double grazeableEnergyOf(const Organism& plant) {
+    const double standingGrowthToLeave = plant.species->traits.energyRequiredToReproduce *
+                                         kGrazingLeavesFractionOfReproductionThreshold;
+    return std::max(0.0, plant.remainingEnergyUnits - standingGrowthToLeave);
+}
+
+/// How far a species of the given category keeps rivals of its own kind from its
+/// breeding site. Zero means it will breed shoulder to shoulder.
+///
+/// Only the hunters hold territory, and that asymmetry is the point. Every other
+/// tier is held in check by something outside itself - plants by the soil, grazers
+/// by the standing crop and by being eaten - but nothing eats a carnivore, so the
+/// only thing that limits one is prey, and prey limits it *late*: the predators
+/// keep breeding at full rate all the way through a prey crash, because a fed
+/// animal has no way of knowing the herd it is eating is the last of it. That
+/// overshoot is what drove the trough below the peak that followed it, cycle after
+/// cycle, until a trough reached zero.
+///
+/// Territory is the standard answer and it acts in exactly the right direction: it
+/// costs a crowded predator population everything and a sparse one nothing, so it
+/// caps the boom without slowing the recovery from a crash - which no amount of
+/// making predators individually weaker was ever going to do, since that lowers the
+/// peak and the trough together.
+int territoryRadiusInTilesForBreeding(OrganismCategory category) {
+    return category == OrganismCategory::Carnivore ? 1 : 0;
+}
+
+/// Where the category sits in the diet's preference order, or the order's size for
+/// something the diet does not include at all - which lets one comparison reject
+/// inedible candidates and rank edible ones at the same time.
+std::size_t preferenceRankOf(std::span<const OrganismCategory> preferenceOrder,
+                             OrganismCategory category) {
+    for (std::size_t rank = 0; rank < preferenceOrder.size(); ++rank) {
+        if (preferenceOrder[rank] == category) {
+            return rank;
+        }
+    }
+    return preferenceOrder.size();
 }
 
 /// How much of its full photosynthetic rate a plant achieves on the given soil,
@@ -191,7 +274,15 @@ double environmentalFitness(const TraitProfile& traits, double temperatureCelsiu
         std::abs(temperatureCelsius - traits.idealTemperatureCelsius) / temperatureRange;
     const double humidityFit =
         1.0 - std::abs(humidityPercent - traits.idealHumidityPercent) / humidityRange;
-    return std::clamp(temperatureFit, 0.0, 1.0) * std::clamp(humidityFit, 0.0, 1.0);
+    // Geometric rather than arithmetic mean, so being outside either band alone
+    // still yields nothing - that property is what makes a species belong to a
+    // climate rather than merely prefer one. The mean instead of the raw product
+    // because the product punished a species twice for one bad tile: half-suited on
+    // both axes came out quarter-suited overall, and a global weather shift moves
+    // both axes at once, which is how a single heatwave used to put most of the map
+    // outside every tolerance band in the same tick.
+    return std::sqrt(std::clamp(temperatureFit, 0.0, 1.0) *
+                     std::clamp(humidityFit, 0.0, 1.0));
 }
 
 int TickReport::livingCountOf(OrganismCategory category) const {
@@ -317,25 +408,45 @@ void SimulationEngine::actAsDecomposer(Organism& organism, double fitness) {
 }
 
 void SimulationEngine::actAsConsumer(Organism& organism, double fitness) {
-    if (isHungry(organism) && !grazeOrHuntWithinReach(organism, fitness)) {
+    if (isBelowForagingSatiation(organism) && !grazeOrHuntWithinReach(organism, fitness)) {
         wanderOneTile(organism);
     }
     tryReproduce(organism, fitness);
 }
 
-Organism* SimulationEngine::findNearestTargetWithinReach(
-    const Organism& seeker, const std::function<bool(const Organism&)>& isTarget) {
+Organism* SimulationEngine::findNearestPreferredPreyWithinReach(const Organism& seeker) {
+    const auto preferenceOrder = seeker.species->diet.categoriesInPreferenceOrder();
     const int reachInTiles = std::max(0, seeker.species->traits.movementRangeInTiles);
+
     for (int radius = 0; radius <= reachInTiles; ++radius) {
         targetCandidates.clear();
+        std::size_t bestRankFound = preferenceOrder.size();
         forEachTileAtChebyshevRadius(
             worldGrid, seeker.tileColumnIndex, seeker.tileRowIndex, radius,
-            [this, &seeker, &isTarget](int columnIndex, int rowIndex) {
+            [&](int columnIndex, int rowIndex) {
                 for (const auto& occupant :
                      worldGrid.tileAt(columnIndex, rowIndex).occupyingOrganisms) {
-                    if (occupant.get() != &seeker && isTarget(*occupant)) {
-                        targetCandidates.push_back(occupant.get());
+                    if (occupant.get() == &seeker || !occupant->isAlive) {
+                        continue;
                     }
+                    const std::size_t rank =
+                        preferenceRankOf(preferenceOrder, occupant->species->category);
+                    if (rank >= preferenceOrder.size() || rank > bestRankFound) {
+                        continue;
+                    }
+                    // A plant with nothing above its root stock is not food, and has
+                    // to be rejected here rather than after it is chosen, or the
+                    // grazer settles for the nearest seedling and never sees the
+                    // grown plant behind it.
+                    if (occupant->species->category == OrganismCategory::Plant &&
+                        grazeableEnergyOf(*occupant) <= 0.0) {
+                        continue;
+                    }
+                    if (rank < bestRankFound) {
+                        bestRankFound = rank;
+                        targetCandidates.clear();
+                    }
+                    targetCandidates.push_back(occupant.get());
                 }
             });
         if (!targetCandidates.empty()) {
@@ -347,11 +458,7 @@ Organism* SimulationEngine::findNearestTargetWithinReach(
 
 bool SimulationEngine::grazeOrHuntWithinReach(Organism& organism, double fitness) {
     const organisms::Species& species = *organism.species;
-    Organism* prey =
-        findNearestTargetWithinReach(organism, [&species](const Organism& candidate) {
-            return candidate.isAlive &&
-                   species.canConsumeCategory(candidate.species->category);
-        });
+    Organism* prey = findNearestPreferredPreyWithinReach(organism);
     if (prey == nullptr) {
         return false;
     }
@@ -363,15 +470,11 @@ bool SimulationEngine::grazeOrHuntWithinReach(Organism& organism, double fitness
 
     double energyTaken = 0.0;
     if (prey->species->category == OrganismCategory::Plant) {
-        // Grazing crops the plant and leaves it standing unless that empties it,
-        // which is what lets a meadow carry grazers at all instead of being
-        // consumed once and never recovering.
-        energyTaken = std::min(
-            appetite, prey->remainingEnergyUnits * kMaximumGrazedFractionPerFeeding);
+        // Grazing crops the plant down towards its root stock and leaves it
+        // standing, which is what lets a meadow carry grazers at all instead of
+        // being consumed once and never recovering.
+        energyTaken = std::min(appetite, grazeableEnergyOf(*prey));
         prey->remainingEnergyUnits -= energyTaken;
-        if (prey->remainingEnergyUnits <= 0.0) {
-            prey->isAlive = false;
-        }
     } else {
         // Animal prey is killed outright. A predator that only wounded its target
         // could never cover its upkeep at these energy costs.
@@ -470,11 +573,41 @@ void SimulationEngine::wanderOneTile(Organism& organism) {
     moveIfTileHasRoom(organism, destination.columnIndex, destination.rowIndex);
 }
 
+bool SimulationEngine::hasBreedingTerritory(const Organism& parent) {
+    const OrganismCategory category = parent.species->category;
+    const int territoryRadiusInTiles = territoryRadiusInTilesForBreeding(category);
+    if (territoryRadiusInTiles <= 0) {
+        return true;
+    }
+    // The parent's own tile is left out: a carnivore already holds it, and the
+    // per-tile capacity is what stops a second one standing there.
+    for (int radius = 1; radius <= territoryRadiusInTiles; ++radius) {
+        bool rivalFound = false;
+        forEachTileAtChebyshevRadius(
+            worldGrid, parent.tileColumnIndex, parent.tileRowIndex, radius,
+            [&](int columnIndex, int rowIndex) {
+                for (const auto& occupant :
+                     worldGrid.tileAt(columnIndex, rowIndex).occupyingOrganisms) {
+                    if (occupant->isAlive && occupant->species->category == category) {
+                        rivalFound = true;
+                    }
+                }
+            });
+        if (rivalFound) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool SimulationEngine::tryReproduce(Organism& parent, double fitness) {
     if (!parent.isReadyToReproduce() || fitness < kMinimumFitnessToReproduce) {
         return false;
     }
     const OrganismCategory category = parent.species->category;
+    if (!hasBreedingTerritory(parent)) {
+        return false;
+    }
     tileCandidates.clear();
     // The parent's own tile first, then the ring around it, so a colony spreads
     // outward from where it started instead of scattering.
