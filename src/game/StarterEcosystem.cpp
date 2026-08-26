@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "petriterm/organisms/Organism.hpp"
@@ -73,8 +74,10 @@ bool trySeedOneIndividual(WorldGrid& world, const Species& species,
         if (fitness < kMinimumFitnessToSeed) {
             continue;
         }
-        tile.occupyingOrganisms.push_back(
-            std::make_unique<Organism>(&species, columnIndex, rowIndex));
+        auto seeded = std::make_unique<Organism>(&species, columnIndex, rowIndex);
+        seeded->remainingEnergyUnits = species.traits.energyRequiredToReproduce *
+                                       kStarterEnergyMultipleOfReproductionThreshold;
+        tile.occupyingOrganisms.push_back(std::move(seeded));
         return true;
     }
     return false;

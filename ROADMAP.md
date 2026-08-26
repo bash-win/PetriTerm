@@ -5,19 +5,16 @@ each sized to review on its own.
 
 ## Status
 
-Merged through PR #16. Engine (terminal, palette, renderer, text measure, input,
+Merged through PR #18. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
 climate), organisms (categories, traits, species, registry, `Organism`),
 simulation (`SimulationEngine`, its four-phase tick, the nutrient cycle, and the
-census), game (viewport, placement, starter ecosystem, headless runs). 138 tests.
+census), game (viewport, placement, starter ecosystem, headless runs). 145 tests,
+one of them a soak run over whole simulated worlds.
 CI runs clang-format, clang-tidy, gcc, clang.
 
 ## What's actually broken or missing
 
-- The food web collapses to plants and decomposers. Carnivores, herbivores, and
-  omnivores die out within a few hundred ticks of every seeded start, so three of
-  the five trophic levels do not currently persist at all. Measured, not guessed;
-  the numbers are under PR 03b.
 - Eco-credits can only be spent, never earned. No objectives, no failure state.
 - The nutrient cycle is simulated but invisible. Soil and detritus move every
   tick and the HUD shows neither, so a plot going barren looks like plants dying
@@ -79,41 +76,113 @@ once, and only the weather column tells them apart.
 The balance pass this was built for is 03b. The measurements it produced are
 recorded there rather than here.
 
-## 03b. `ecosystem-balance-pass`
+## 03b. `ecosystem-balance-pass` — done
 
-Touches `data/species.txt`, the engine's tuning constants, and
-`StarterDensityPerHundredTiles`. New: `tests/test_ecosystem_soak.cpp`.
+Touched `data/species.txt`, the engine's tuning constants,
+`StarterDensityPerHundredTiles`, and the weather profiles. New:
+`tests/test_ecosystem_soak.cpp`.
 
-What the harness measured, across seeds 1, 7, 42, and 99 — the same failures
-every time, so none of this is one unlucky world:
+Done: 5000 ticks across seeds 1-7, 42, 99 and 123, with all five trophic categories
+standing the whole way. The numbers that matter are the troughs, since a category
+that touches zero anywhere is gone for good — the lowest each fell to, worst seed of
+the ten: plants 16,340, herbivores 583, carnivores 84, omnivores 18, decomposers
+1,562. Standing populations at tick 5000 run 21,000-24,000 plants, 3,700-7,700
+herbivores, 550-820 carnivores, 1,000-2,700 omnivores and 4,400-6,800 decomposers,
+and every tier oscillates rather than settling — the predator-prey cycle is visible
+in the census output now instead of being a thing the model was supposed to have.
 
-- **Carnivores never eat once.** Zero of them alive by tick 20 in every seed.
-  With predators seeded at 0.25 per hundred tiles and herbivores thinning to
-  roughly one per 450 tiles, a hunter with `moveRange` 3 sees 49 tiles and starves
-  at 3 energy a tick before it ever finds prey. Either prey density, hunter reach,
-  or the wander walk has to change; a predator that cannot find food is not a
-  balance problem so much as a search problem.
-- **Herbivores starve surrounded by plants**, gone by tick 140 with 1,315 of them
-  on the map. This is the trade-off already flagged on
-  `kMaximumGrazedFractionPerFeeding`: half of a seedling's energy is not a meal.
-- **Omnivores go the same way as the herbivores**, and for the same reason.
-- **Weather is a mass-casualty event.** Seed 42 loses plants 2730 → 613 to a
-  heatwave at tick 140, 3576 → 1224 to a cold snap at tick 300, and the rest to a
-  second heatwave at 400. A pattern shifts temperature by around 11°C against
-  tolerance bands of ±7 to ±16, so one event can put most of the map outside every
-  species' range at the same moment. Worth deciding whether the fix is smaller
-  weather offsets, wider bands, or a gentler fitness curve — fitness multiplies
-  two linear falloffs and gates feeding and breeding both, which is what makes an
-  event this sharp.
-- **Plants then boom-bust with nothing grazing them**: seed 1 reached 10,109 and
-  was still climbing at tick 600, seed 42 crashed to zero.
-- **The nutrient cycle is not implicated.** Mean soil held between 0.59 and 0.90
-  in every run and detritus turned over the whole time, so PR 02's mineralization
-  and drawdown pair can be left alone. That question is settled; it was the one
-  thing this was most expected to catch.
+The one number still thin is seed 123's omnivores at 18. That is a real risk of loss
+on a longer run and the honest place to look first if this regresses.
 
-Done when: the starter scenario survives 5000 ticks across 10 seeds with all five
-trophic categories present.
+Most of what the harness originally reported turned out to be a symptom rather
+than a cause, and the causes were not the ones the measurements suggested. Worth
+keeping, because the same misreadings are available to any later PR that touches a
+rate:
+
+- **Nothing was starting grown.** `Organism` gives every new organism half its
+  reproduction threshold, which is right for a birth and wrong for a founding
+  population. Every plant in a seeded world was therefore a seedling with nothing
+  on it above the root stock a grazer can take, so the herbivores placed beside
+  them starved in what looked like a meadow. That one line explained the
+  herbivores, the omnivores, and most of the carnivores. Fixed by seeding a starter
+  world grown rather than newborn.
+- **The producer tier was seeded at an eightieth of its standing crop** — 8 per
+  hundred tiles against the ~20,000 plants the world settles at. The forage the
+  founding herd needed did not exist until tick 100 and the herd was dead by 50.
+- **"Carnivores never find prey" was backwards.** They find it immediately and eat
+  all of it: 129 herbivores down to 5 by tick 11. A hunter foraged whenever it had
+  room to store more energy, which is every tick of its life. The fix is satiation
+  (`kForagingSatiationFractionOfEnergyCap`) — a fed animal ignores food, so one
+  meal buys a dozen ticks of not hunting. Reach was never the problem, and the
+  reach increases tried first made it worse.
+- **Grazing scaled the wrong way round.** Taking a fraction of a plant's remaining
+  energy made a mature plant an easy meal and a seedling a mouthful too small to
+  live on. Replaced with a floor: a graze leaves the root stock, so maturity is
+  what makes a plant food, and a browsed plant is held below its own breeding
+  threshold rather than killed. Grazing now regulates the meadow through plant
+  reproduction instead of plant death.
+- **Diet is now ordered, and where preference applies decided stability.** An
+  omnivore given a free choice farms the herbivores to extinction: it is never
+  short of plants, so nothing limits how many rabbits it takes. But preference
+  applied across the whole reach is worse in the other direction — a predator then
+  hunts its favourite prey hardest exactly when that prey is rarest. Ranking within
+  a search ring, so distance still wins and preference only breaks ties, gives both
+  the grazing omnivore and genuine prey switching. This was the single change that
+  turned a diverging oscillation into a stable one.
+- **Weather was a mass-casualty event, and the amplitude was only half of it.**
+  Offsets came down, but the load-bearing change was pairing each pattern's
+  severity against its *duration*: an organism carries a couple of dozen ticks of
+  upkeep in reserve, and a sharp pattern lasting longer than that reserve does not
+  stress a population, it removes one. The two sharp patterns are now the two short
+  ones. Fitness also combines its two axes as a geometric mean rather than a
+  product, which stops one bad tile counting twice.
+- **Nothing eats a carnivore, so the top of the web needed a brake of its own.**
+  This was the last failure standing and the hardest to see, because it looks like
+  the predators being too weak: they were hanging on at troughs of five to thirty
+  and going out on half the seeds. They were in fact too strong. Every other tier is
+  limited from outside — plants by the soil, grazers by the crop and by being eaten
+  — but a predator's only limit is prey, and prey limits it late, because a fed
+  animal cannot tell that the herd it is eating is the last of it. So the predators
+  bred at full rate straight through each prey crash, and every cycle's trough came
+  in below the last. Making them individually weaker never worked, and could not
+  have: it lowers the peak and the trough together. Territory — a carnivore will not
+  breed with another within one tile — costs a crowded predator population
+  everything and a sparse one nothing, which is the asymmetry the problem needed.
+  Carnivore troughs went from 0–34 to 114–177 across the same six seeds, and the
+  herbivores under them from 0–476 to 991–1800.
+- **Coexistence would not tune.** Two species in the same niche with slightly
+  different numbers is a knife-edge: whichever is marginally better excludes the
+  other, and the winner flips on small changes. The omnivore was the case that made
+  this obvious — in temperate grassland it is a worse rabbit that also eats rabbits,
+  so it either loses to the grazers or removes them, and no setting of its numbers
+  avoids both. What worked was moving it: the jungle and the wetland are the parts of
+  a generated map no herbivore has its ideal near, and the two carnivores went to
+  opposite ends of the temperature range for the same reason. Niche separation, not
+  parameter balance.
+- **A trophic level resting on one species is one bad seed from empty**, and two is
+  not enough if both fail the same way. The omnivores were the last category with a
+  single species in it and the last still going extinct — on four of six seeds,
+  while everything around them held. A second omnivore fixed most of those, but both
+  were in humid ground, so a seed whose map came out dry still took the jungle and
+  the wetland together. The third sits in the tundra, which fails under the opposite
+  conditions, and also gives the wolf a prey base in its own climate — nothing else
+  a wolf eats has its ideal anywhere near freezing, so the cold half of the map was
+  a predator hunting prey that only reached it at the edge of its tolerance.
+  Uncorrelated niches per category, not just several of them.
+- **The nutrient cycle is not implicated**, as originally measured. Mean soil holds
+  between 0.5 and 0.9 throughout. PR 02's mineralization and drawdown pair are left
+  alone.
+
+One bug found on the way: the `species.txt` copy beside the binary was a
+`POST_BUILD` step, which only runs when the target relinks. Editing a species and
+rebuilding therefore ran the *old* data with the build reporting success — which
+silently invalidates the one workflow the file exists for. It is a keyed build
+input now.
+
+`tests/test_ecosystem_soak.cpp` guards this in two tiers: a 600-tick run over two
+seeds on every build, which covers every failure listed above, and the full
+criterion — 5000 ticks across 10 seeds — behind the `[.soak-full]` tag, to be run
+whenever a tuning constant or anything in `species.txt` changes.
 
 ## 04. `active-organism-index`
 
@@ -304,9 +373,13 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-03b, then 15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if
-the soak runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 →
-25.
+15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if the soak
+runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 → 25.
+
+04 is now called for. The balance pass left the world carrying 25,000 to 35,000
+organisms in steady state rather than the few thousand it collapsed to before, and
+a 5000-tick soak run takes around two minutes a seed — which is why the full
+ten-seed soak is tagged out of the default test run rather than in it.
 
 03b is lettered rather than numbered because the balance pass turned out to be a
 PR of its own rather than the tail of the harness, and renumbering everything

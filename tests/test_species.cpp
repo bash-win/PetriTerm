@@ -50,6 +50,36 @@ TEST_CASE("a diet consumes exactly the categories it allows", "[species]") {
     REQUIRE_FALSE(diet.canConsume(OrganismCategory::Carnivore));
 }
 
+TEST_CASE("a diet keeps the order its categories were added in", "[species]") {
+    Diet diet;
+    diet.allowCategory(OrganismCategory::Plant);
+    diet.allowCategory(OrganismCategory::Herbivore);
+
+    const auto ordered = diet.categoriesInPreferenceOrder();
+    REQUIRE(ordered.size() == 2);
+    REQUIRE(ordered[0] == OrganismCategory::Plant);
+    REQUIRE(ordered[1] == OrganismCategory::Herbivore);
+}
+
+TEST_CASE("a repeated diet category does not take a second slot", "[species]") {
+    // A species file listing a category twice would otherwise make it two of the
+    // entries the engine walks, and so likelier to be chosen than the one after it.
+    Diet diet;
+    diet.allowCategory(OrganismCategory::Herbivore);
+    diet.allowCategory(OrganismCategory::Herbivore);
+    diet.allowCategory(OrganismCategory::Omnivore);
+
+    const auto ordered = diet.categoriesInPreferenceOrder();
+    REQUIRE(ordered.size() == 2);
+    REQUIRE(ordered[0] == OrganismCategory::Herbivore);
+    REQUIRE(ordered[1] == OrganismCategory::Omnivore);
+}
+
+TEST_CASE("an empty diet offers nothing to walk", "[species]") {
+    const Diet diet;
+    REQUIRE(diet.categoriesInPreferenceOrder().empty());
+}
+
 TEST_CASE("Species canConsumeCategory reflects its diet", "[species]") {
     Species herbivore;
     herbivore.speciesId = "rabbit";

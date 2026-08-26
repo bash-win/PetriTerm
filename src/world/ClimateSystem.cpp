@@ -27,18 +27,35 @@ struct WeatherPatternProfile {
 constexpr double kTicksPerSeasonalYear = 2000.0;
 
 /// Peak warm/cold temperature swing at the height of summer/winter, in Celsius.
-constexpr double kSeasonalTemperatureAmplitudeCelsius = 8.0;
+///
+/// Small next to the tolerance bands in species.txt on purpose. The season lasts
+/// five hundred ticks, which is longer than any organism's energy reserve can
+/// outlast a shortfall, so a seasonal offset is not something a population can ride
+/// out the way it rides out a heatwave - whatever the season does to fitness, it
+/// does for long enough to be decided by it. This is the offset that biases a year;
+/// the drama belongs to the weather patterns below.
+constexpr double kSeasonalTemperatureAmplitudeCelsius = 4.0;
 
 /// Ticks the initial Clear pattern lasts before the first weather transition.
 constexpr int kInitialPatternDurationTicks = 60;
 
+/// Every weather pattern, in WeatherPattern order.
+///
+/// Offset and duration are tuned against each other rather than independently,
+/// because whether a pattern is weather or an extinction event is decided by the
+/// pair. An organism carries at most a couple of dozen ticks of upkeep in reserve,
+/// and a pattern that holds it below the fitness it needs to cover that upkeep for
+/// longer than the reserve lasts does not stress a population, it removes one. So
+/// the two sharp patterns are the two short ones: a heatwave is a scare that costs
+/// a plant most of its stored energy and stops it seeding, and it is over before
+/// the reserve is. The mild patterns are the ones allowed to last.
 const std::array<WeatherPatternProfile, 5>& weatherPatternProfiles() {
     static constexpr std::array<WeatherPatternProfile, 5> profiles{{
         {WeatherPattern::Clear, "Clear", 0.0, 0.0, 40, 90, 50},
-        {WeatherPattern::Rainy, "Rainy", -3.0, 25.0, 25, 60, 20},
-        {WeatherPattern::Heatwave, "Heatwave", 10.0, -15.0, 20, 45, 10},
-        {WeatherPattern::ColdSnap, "Cold Snap", -12.0, -5.0, 20, 45, 10},
-        {WeatherPattern::Storm, "Storm", -5.0, 30.0, 15, 30, 10},
+        {WeatherPattern::Rainy, "Rainy", -2.0, 12.0, 25, 60, 20},
+        {WeatherPattern::Heatwave, "Heatwave", 5.0, -8.0, 10, 20, 10},
+        {WeatherPattern::ColdSnap, "Cold Snap", -6.0, -3.0, 10, 20, 10},
+        {WeatherPattern::Storm, "Storm", -3.0, 16.0, 8, 16, 10},
     }};
     return profiles;
 }
