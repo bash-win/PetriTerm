@@ -6,7 +6,7 @@ namespace petriterm::engine {
 
 /// Presentation intent rather than a raw ncurses attribute mask. Game code says
 /// what a run of text means and the Renderer decides how to express it, which is
-/// what lets the engine keep ncurses.h out of every scene.
+/// what lets the engine keep the curses headers out of every scene.
 enum class TextEmphasis {
     Normal,
     Bold,

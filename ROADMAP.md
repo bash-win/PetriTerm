@@ -5,13 +5,14 @@ each sized to review on its own.
 
 ## Status
 
-Merged through PR #19. Engine (terminal, palette, renderer, text measure, input,
+Merged through PR #20. Engine (terminal, palette, renderer, text measure, input,
 grid, RNG, scenes, screen regions, relayout, clock, loop), world (noise, biomes,
 tiles, generation, climate), organisms (categories, traits, species, registry,
 `Organism`), simulation (`SimulationEngine`, its four-phase tick, the nutrient
 cycle, and the census), game (viewport, placement, starter ecosystem, headless
 runs). 167 tests, one of them a soak run over whole simulated worlds.
-CI runs clang-format, clang-tidy, gcc, clang.
+CI runs clang-format, clang-tidy, gcc, clang, and a configure-and-build pass on
+Fedora, Debian, Alpine, Arch and macOS.
 
 ## What's actually broken or missing
 
@@ -22,9 +23,9 @@ CI runs clang-format, clang-tidy, gcc, clang.
 - `SIGTSTP`/`SIGCONT` are unhandled, so Ctrl+Z and `fg` leave the screen wrong.
   Resize is handled now, but only because ncurses delivers it as a key event;
   nothing installs a `SIGWINCH` handler. PR 19.
-- `panelw` is a `REQUIRED` dependency in `CMakeLists.txt:17` and the code never
-  calls it. Glyphs are Unicode-only with no ASCII fallback. The monochrome path
-  in `ColorPalette` is unexercised. CI is Linux-only.
+- Glyphs are Unicode-only with no ASCII fallback, so the map is unreadable boxes
+  on the Linux console or under `TERM=vt100`. PR 17. The monochrome path in
+  `ColorPalette` is unexercised. PR 18.
 
 ## Checklist before opening any PR
 
@@ -328,16 +329,68 @@ position survived is the one the player returns to.
 overdrawing the map, which PR 08 replaces. What changed is that it is recomputed
 rather than captured.
 
-## 16. `curses-portability`
+## 16. `curses-portability` — done, pending CI
 
-- Drop the unused `panelw` `REQUIRED` lookup. It is a configure-time hard failure
-  for a library nothing calls.
-- Fall back across ncursesw, ncurses, and BSD curses; pkg-config before
-  `find_package`; no assumption that wide support is a separate lib.
-- Make the macOS build work, both system curses and Homebrew ncurses.
+New: `cmake/WideCurses.cmake`, `cmake/wide_curses_probe.cpp`, and
+`include/petriterm/engine/Curses.hpp.in`. The `panelw` lookup is gone, and the
+five files that each included `<ncurses.h>` now include the configured
+`Curses.hpp` instead.
 
-Done when: configures and builds on Fedora, Debian/Ubuntu, Alpine (musl), Arch,
-and macOS.
+**Discovery is a compile probe, not a library-name lookup.** This is the whole
+design and it came out of the observation that the name answers none of the
+questions that matter. `ncursesw` is a separate library on Debian and a symlink
+to `ncurses` on Arch and Alpine. Fedora puts wide support in the plain
+`ncurses.h`; Debian puts it in `ncursesw/ncurses.h`; macOS calls the header
+`curses.h` and hides the wide API behind `_XOPEN_SOURCE_EXTENDED`. And wide
+characters, the ncurses extensions (`set_escdelay`, `use_default_colors`) and
+`resizeterm` are three independent build options, so a library named `ncursesw`
+can be missing any of them. The one question with a reliable answer is whether
+the code compiles and links, so `wide_curses_probe.cpp` calls everything the
+engine calls and each candidate is accepted only if all of it builds.
+
+That file is therefore the definition of what the project needs from curses, and
+it has to be kept up to date: something new called from a source file and not
+added there shows up as a build failure on someone else's distribution instead of
+a configure failure on ours.
+
+Candidates are tried pkg-config (`ncursesw`, then `ncurses`) → `find_package(Curses)`
+→ bare `find_library`, and each is crossed with three header spellings and with
+and without `_XOPEN_SOURCE_EXTENDED`. pkg-config is first because it is the only
+source that knows the full transitive link line, which is what a curses split
+into a separate `libtinfo` needs — guessing there produces a link error that
+reads as a missing symbol rather than a missing dependency. The feature macro is
+tried last and applied on the compile line rather than in a header, since it has
+to precede every system header and no header can promise it was included first.
+
+Two CMake traps worth remembering:
+
+- `check_cxx_source_compiles` is a **macro**, so it re-parses the source string
+  as CMake code and a C++ escape sequence in it is a configure-time syntax error.
+  That is why the probe is a real file handed to `try_compile`.
+- `set(variable "a" "b")` builds a *list*, and interpolating it into a message
+  renders the separating semicolon. `string(CONCAT)` for anything meant to read
+  as a sentence.
+
+"Fall back to BSD curses" is not claimed, and could not be: the engine calls
+`set_escdelay` and `use_default_colors`, which are ncurses extensions. What the
+fallback actually does is try the library *names* `ncursesw`, `ncurses` and
+`curses` and let the probe rule, which is what makes macOS's `libcurses` work.
+A genuine BSD curses fails the probe and gets a configure error naming what is
+missing, which is the honest outcome rather than a link error later.
+
+Verified locally on Fedora: all four discovery routes reached in turn (by
+disabling each in front of it), and both branches of the failure message — found
+and rejected, and nothing found at all. Both compilers still build.
+
+Still pending: the five-platform criterion itself. Nothing on this machine can
+run Debian, Alpine, Arch or macOS, so it is checked by the new CI jobs — the four
+Linux distributions through `docker run` and macOS against both its system curses
+and Homebrew's. The Linux ones are containerised at the step rather than the job,
+because `actions/checkout` needs a glibc Node and the musl image has none.
+**Do not treat 16 as closed until those jobs are green.** macOS system curses is
+the one most likely to fail: it is an ncurses 5.7, and whether Apple's build has
+all three of the extensions the probe demands is exactly the thing that has never
+been tested here.
 
 ## 17. `glyph-themes`
 
@@ -372,9 +425,13 @@ with full keyboard parity so a mouse is never required.
 
 A job driving the game through a pty across `TERM=xterm-256color`, `xterm`,
 `screen`, `tmux-256color`, `linux`, and `vt100`, at several sizes and under
-`LC_ALL=C`, asserting it starts, renders, takes input, and exits cleanly. Add a
-macOS build-and-test job. "Runs in every terminal" is only true if something
-checks it every commit.
+`LC_ALL=C`, asserting it starts, renders, takes input, and exits cleanly.
+"Runs in every terminal" is only true if something checks it every commit.
+
+The macOS build-and-test job this used to also ask for came with 16, along with
+the four Linux distributions. What is left here is the part 16 does not cover: no
+job yet drives the game through a pty, so every platform is checked for *building*
+and for the unit tests and none for actually starting in a terminal.
 
 ## 21. `startup-diagnostics`
 
@@ -415,7 +472,7 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if the soak
+17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if the soak
 runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 → 25.
 
 04 is now called for. The balance pass left the world carrying 25,000 to 35,000
@@ -428,7 +485,7 @@ PR of its own rather than the tail of the harness, and renumbering everything
 below it would break the correspondence between these numbers and the branch
 names already merged.
 
-Two traps. 16 through 18 are cheap now and expensive later: every panel built in
+Two traps. 17 and 18 are cheap now and expensive later: every panel built in
 Milestone B without a glyph/color abstraction is a panel to retrofit with one.
 15 was the other half of that and is done, so the relayout hook is in place
 before the first panel is written.

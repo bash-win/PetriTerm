@@ -66,7 +66,7 @@ public:
 
     /// Returns the full-screen window ncurses created at initialization, for
     /// handing to a Renderer. Exposed here, from the class that already owns the
-    /// curses session, so no caller has to name stdscr and pull ncurses.h into
+    /// curses session, so no caller has to name stdscr and pull curses headers into
     /// game code.
     WINDOW* rootWindow() const;
 

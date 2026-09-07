@@ -1,0 +1,19 @@
+#pragma once
+
+// Configured by cmake/WideCurses.cmake into the build directory. The header a
+// wide curses is reached through varies by platform - <ncursesw/ncurses.h> on
+// Debian, <ncurses.h> on Fedora and Arch, <curses.h> on macOS - so the include
+// is decided once at configure time by the probe that established the library
+// works, rather than guessed independently in each source file.
+//
+// Every file in the engine that talks to curses includes this and nothing else.
+// That is not only about the include path: it is the one place to look to see
+// what the engine depends on curses for, and the counterpart to
+// WideCurses.cmake's probe, which is the list of what that dependency consists
+// of.
+//
+// Any feature macro the platform needs is on the compile line instead of here,
+// because it has to precede every system header and a header cannot promise it
+// was included first.
+
+#include <@PETRITERM_CURSES_HEADER_NAME@>

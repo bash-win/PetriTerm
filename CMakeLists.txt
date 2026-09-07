@@ -12,9 +12,23 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 
-set(CURSES_NEED_WIDE TRUE)
-find_package(Curses REQUIRED)
-find_library(PANELW_LIBRARY NAMES panelw REQUIRED)
+# Defines petriterm::curses and PETRITERM_CURSES_HEADER_NAME, or fails with a
+# message naming what it tried. Kept in its own module because deciding which
+# curses this platform has is a self-contained job of some length, and none of it
+# is interesting when reading the rest of this file.
+#
+# The panelw lookup that used to sit here was dropped: it was REQUIRED, so it
+# turned a library the code never calls into a configure-time hard failure on any
+# system that splits the panel library out.
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(WideCurses)
+
+# Generated rather than checked in, because the header to include is a property
+# of the machine being built on, not of the source.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/petriterm/engine/Curses.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated-include/petriterm/engine/Curses.hpp
+    @ONLY)
 
 add_library(petriterm_core STATIC
     src/engine/TerminalWindow.cpp
@@ -46,14 +60,9 @@ add_library(petriterm_core STATIC
 )
 target_include_directories(petriterm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_BINARY_DIR}/generated-include
 )
-target_include_directories(petriterm_core SYSTEM PUBLIC
-    ${CURSES_INCLUDE_DIRS}
-)
-target_link_libraries(petriterm_core PUBLIC
-    ${CURSES_LIBRARIES}
-    ${PANELW_LIBRARY}
-)
+target_link_libraries(petriterm_core PUBLIC petriterm::curses)
 
 add_executable(petriterm src/main.cpp)
 target_link_libraries(petriterm PRIVATE petriterm_core)

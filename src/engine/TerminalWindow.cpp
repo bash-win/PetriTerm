@@ -3,9 +3,10 @@
 #include <csignal>
 #include <optional>
 
-#include <ncurses.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+
+#include "petriterm/engine/Curses.hpp"
 
 namespace petriterm::engine {
 

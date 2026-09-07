@@ -87,3 +87,76 @@ jobs:
           name: petriterm-linux-x64
           path: build/petriterm
           if-no-files-found: error
+
+  # The "runs on every distribution" claim is only true if something checks it,
+  # and the interesting differences are all in how curses is packaged: whether
+  # the wide library has its own name, which directory the header sits in, and
+  # whether pkg-config knows about any of it.
+  #
+  # Run through docker rather than the job-level `container:` key so that
+  # actions/checkout runs on the host. The checkout action needs a glibc Node,
+  # which the musl image does not have, and containerising only the build step
+  # keeps all four distributions on one code path instead of special-casing that.
+  linux-distributions:
+    name: configure & build (${{ matrix.distribution.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distribution:
+          - name: fedora
+            image: fedora:latest
+            install: dnf -y install gcc-c++ make cmake ncurses-devel git
+          - name: debian
+            image: debian:stable
+            install: >-
+              apt-get update &&
+              apt-get install -y --no-install-recommends
+              g++ make cmake libncurses-dev git ca-certificates
+          - name: alpine
+            image: alpine:latest
+            install: apk add --no-cache build-base cmake ncurses-dev git
+          - name: arch
+            image: archlinux:latest
+            install: pacman -Syu --noconfirm --needed gcc make cmake ncurses git
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure, build and test in ${{ matrix.distribution.name }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ${{ matrix.distribution.image }} \
+            sh -euxc '
+              ${{ matrix.distribution.install }}
+              cmake -S . -B build-distro -DCMAKE_BUILD_TYPE=Debug
+              cmake --build build-distro -j"$(nproc)"
+              ctest --test-dir build-distro --output-on-failure --no-tests=ignore
+            '
+
+  # macOS ships an ncurses 5.7 that keeps the wide API behind
+  # _XOPEN_SOURCE_EXTENDED and calls its header curses.h, and Homebrew's 6.x is
+  # keg-only so it is off every default search path. Those are two different
+  # code paths through WideCurses.cmake, so both are built.
+  macos:
+    name: configure & build (macOS, ${{ matrix.curses }} curses)
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        curses: [system, homebrew]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Homebrew ncurses
+        if: matrix.curses == 'homebrew'
+        run: brew install ncurses
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=ignore

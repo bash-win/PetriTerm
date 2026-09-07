@@ -1,6 +1,6 @@
 #include "petriterm/engine/InputManager.hpp"
 
-#include <ncurses.h>
+#include "petriterm/engine/Curses.hpp"
 
 namespace petriterm::engine {
 

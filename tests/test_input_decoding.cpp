@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include <ncurses.h>
-
+#include "petriterm/engine/Curses.hpp"
 #include "petriterm/engine/InputManager.hpp"
 
 using petriterm::engine::decodeRawKeyRead;

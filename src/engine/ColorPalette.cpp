@@ -1,6 +1,6 @@
 #include "petriterm/engine/ColorPalette.hpp"
 
-#include <ncurses.h>
+#include "petriterm/engine/Curses.hpp"
 
 namespace petriterm::engine {
 

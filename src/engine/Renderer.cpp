@@ -2,8 +2,7 @@
 
 #include <algorithm>
 
-#include <ncurses.h>
-
+#include "petriterm/engine/Curses.hpp"
 #include "petriterm/engine/TextMeasure.hpp"
 
 namespace petriterm::engine {

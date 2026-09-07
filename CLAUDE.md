@@ -37,12 +37,19 @@ file pair, mirrored by `tests/test_*.cpp`.
 - **`world/`** — noise, biomes, tiles, world generation, climate.
 - **`organisms/`** — categories, traits, species, the species registry, and the
   living `Organism`.
-- **`simulation/`** — per-tick ecology. Does not exist yet; see ROADMAP PR 01.
+- **`simulation/`** — per-tick ecology: the four-phase tick, the nutrient cycle,
+  and the census.
 - **`game/`** — player-facing glue: viewport, placement, and (later) HUD,
   scenarios, tools.
 
 `data/species.txt` holds the species definitions, parsed at startup and copied
-next to the binary by a post-build step.
+next to the binary as a keyed build input.
+
+`cmake/WideCurses.cmake` decides which curses this machine has by compiling
+`cmake/wide_curses_probe.cpp` against each candidate, and configures
+`Curses.hpp.in` with the header that worked. That probe is the list of what the
+engine needs from curses — anything new called from a source file belongs in it
+too, or the first sign of trouble is a build failure on another distribution.
 
 ## Conventions
 
