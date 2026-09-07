@@ -16,6 +16,7 @@
 #include "petriterm/engine/Renderer.hpp"
 #include "petriterm/engine/Scene.hpp"
 #include "petriterm/engine/SceneManager.hpp"
+#include "petriterm/engine/ScreenRegion.hpp"
 #include "petriterm/engine/SimulationClock.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 #include "petriterm/game/CommandLineOptions.hpp"
@@ -63,6 +64,10 @@ using petriterm::world::WorldGrid;
 
 constexpr std::uint64_t kBootstrapWorldSeed = 42;
 constexpr int kStartingEcoCredits = 50;
+
+/// Rows reserved along the bottom of the screen for the key-hint bar. One,
+/// because the hint is written to fit a single 80-column line.
+constexpr int kHelpBarHeightInRows = 1;
 
 /// Returns a drawing priority so the highest trophic level present on a tile is
 /// the one shown: carnivore > omnivore > herbivore > plant > decomposer.
@@ -122,18 +127,33 @@ std::filesystem::path locateSpeciesFile() {
 /// single-steps. The simulation runs underneath, so placed organisms feed, breed,
 /// and die while the HUD reports the census. Replaced by the real simulation
 /// screen in a later milestone.
+///
+/// Takes no screen dimensions: everything positional is derived in relayout,
+/// which the game loop calls before the first frame and again on every resize.
 class WorldViewScene : public Scene {
 public:
     WorldViewScene(SimulationEngine& simulation, const SpeciesRegistry& registry,
-                   SimulationClock& simulationClock, int screenColumns, int screenRows)
+                   SimulationClock& simulationClock)
         : simulation(simulation),
           placement(simulation.world().widthInTiles(), simulation.world().heightInTiles(),
                     registry.allSpecies()),
           simulationClock(simulationClock),
           ecoCreditBalance(kStartingEcoCredits),
-          helpBarRow(screenRows - 1),
-          viewport(simulation.world().widthInTiles(), simulation.world().heightInTiles(), 0,
-                   0, screenColumns, screenRows - 1) {}
+          viewport(simulation.world().widthInTiles(), simulation.world().heightInTiles(),
+                   ScreenRegion{}) {}
+
+    /// Gives the bottom row to the help bar and the rest to the map. Deliberately
+    /// this crude: the HUD still overdraws the map's top rows, and PR 08 replaces
+    /// the whole arrangement with a composed layout. What matters here is that the
+    /// split is recomputed rather than captured once.
+    void relayout(const ScreenRegion& newScreenRegion) override {
+        screenRegion = newScreenRegion;
+        viewport.setScreenRegion(screenRegion.withoutBottomRows(kHelpBarHeightInRows));
+        // The cursor can end up off-screen when the terminal shrinks, and a
+        // cursor the player cannot see is worse than a scrolled map.
+        viewport.ensureTileVisible(placement.cursorColumnIndex(),
+                                   placement.cursorRowIndex());
+    }
 
     void update(double) override { simulation.advanceOneTick(); }
 
@@ -141,6 +161,9 @@ public:
         constexpr std::string_view hint =
             "arrows: cursor  tab: species  enter: place  space: pause  +/-: speed  "
             ".: step  q: quit";
+        if (screenRegion.isEmpty()) {
+            return;
+        }
         renderer.beginFrame();
         const WorldGrid& world = simulation.world();
         for (int rowOffset = 0; rowOffset < viewport.visibleHeightInTiles(); ++rowOffset) {
@@ -159,7 +182,8 @@ public:
             }
         }
         drawHud(renderer);
-        renderer.drawText(0, helpBarRow, hint, TextStyle{TerminalColor::Cyan});
+        renderer.drawText(0, screenRegion.bottomRow(), hint,
+                          TextStyle{TerminalColor::Cyan});
         renderer.endFrame();
     }
 
@@ -323,7 +347,7 @@ private:
     PlacementController placement;
     SimulationClock& simulationClock;
     int ecoCreditBalance;
-    int helpBarRow;
+    ScreenRegion screenRegion;
     Viewport viewport;
 };
 
@@ -391,10 +415,8 @@ int main(int argumentCount, char** argumentValues) {
         petriterm::engine::SimulationClock simulationClock;
 
         petriterm::engine::SceneManager sceneManager;
-        const auto dimensions = terminal.currentDimensions();
         sceneManager.pushScene(
-            std::make_unique<WorldViewScene>(simulation, speciesRegistry, simulationClock,
-                                             dimensions.columns, dimensions.rows));
+            std::make_unique<WorldViewScene>(simulation, speciesRegistry, simulationClock));
 
         // Thirty frames a second: nothing on screen changes faster than a tick,
         // and the simulation rate is the clock's business, not the loop's.

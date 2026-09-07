@@ -5,9 +5,28 @@
 namespace petriterm::engine {
 
 void SceneManager::pushScene(std::unique_ptr<Scene> scene) {
-    if (scene) {
-        sceneStack.push_back(std::move(scene));
+    adoptScene(std::move(scene));
+}
+
+void SceneManager::adoptScene(std::unique_ptr<Scene> scene) {
+    if (!scene) {
+        return;
     }
+    if (screenRegion) {
+        scene->relayout(*screenRegion);
+    }
+    sceneStack.push_back(std::move(scene));
+}
+
+void SceneManager::relayoutAllScenes(const ScreenRegion& newScreenRegion) {
+    screenRegion = newScreenRegion;
+    for (const auto& scene : sceneStack) {
+        scene->relayout(newScreenRegion);
+    }
+}
+
+const std::optional<ScreenRegion>& SceneManager::currentScreenRegion() const {
+    return screenRegion;
 }
 
 bool SceneManager::hasActiveScene() const {
@@ -42,9 +61,7 @@ void SceneManager::applyTransition(SceneTransition transition) {
         case TransitionKind::None:
             break;
         case TransitionKind::Push:
-            if (transition.sceneToPush) {
-                sceneStack.push_back(std::move(transition.sceneToPush));
-            }
+            adoptScene(std::move(transition.sceneToPush));
             break;
         case TransitionKind::Pop:
             if (!sceneStack.empty()) {
@@ -55,9 +72,7 @@ void SceneManager::applyTransition(SceneTransition transition) {
             if (!sceneStack.empty()) {
                 sceneStack.pop_back();
             }
-            if (transition.sceneToPush) {
-                sceneStack.push_back(std::move(transition.sceneToPush));
-            }
+            adoptScene(std::move(transition.sceneToPush));
             break;
         case TransitionKind::Exit:
             exitHasBeenRequested = true;

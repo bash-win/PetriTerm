@@ -1,8 +1,11 @@
 #include "petriterm/engine/TerminalWindow.hpp"
 
 #include <csignal>
+#include <optional>
 
 #include <ncurses.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 namespace petriterm::engine {
 
@@ -22,6 +25,26 @@ void restoreTerminalOnSignal(int signalNumber) {
     endwin();
     std::signal(signalNumber, SIG_DFL);
     std::raise(signalNumber);
+}
+
+/// Asks the kernel for the window size of the terminal on standard output, or
+/// std::nullopt if it cannot say.
+///
+/// Asked directly rather than read from curses because curses is the thing being
+/// corrected here. Some terminals and multiplexers report a zero dimension while
+/// a resize is in flight, which is treated the same as no answer: keeping the
+/// previous size for one more frame is always better than resizing the screen to
+/// nothing.
+std::optional<TerminalDimensions> queryTerminalSizeFromKernel() {
+    winsize windowSize{};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &windowSize) == -1) {
+        return std::nullopt;
+    }
+    if (windowSize.ws_col == 0 || windowSize.ws_row == 0) {
+        return std::nullopt;
+    }
+    return TerminalDimensions{static_cast<int>(windowSize.ws_col),
+                              static_cast<int>(windowSize.ws_row)};
 }
 
 }
@@ -59,6 +82,22 @@ TerminalDimensions TerminalWindow::currentDimensions() const {
     int columns = 0;
     getmaxyx(stdscr, rows, columns);
     return TerminalDimensions{columns, rows};
+}
+
+TerminalDimensions TerminalWindow::adoptResizedTerminal() {
+    // Idempotent by design: ncurses' own SIGWINCH handling already calls
+    // resizeterm before it delivers KEY_RESIZE on most builds, so this usually
+    // finds the sizes already in agreement and does nothing. It is here for the
+    // builds and platforms where that is not true, and so the resize path does
+    // not depend on which of those this is.
+    if (const std::optional<TerminalDimensions> liveSize = queryTerminalSizeFromKernel()) {
+        const TerminalDimensions cursesSize = currentDimensions();
+        if (liveSize->rows != cursesSize.rows || liveSize->columns != cursesSize.columns) {
+            resizeterm(liveSize->rows, liveSize->columns);
+        }
+    }
+    clearok(stdscr, TRUE);
+    return currentDimensions();
 }
 
 WINDOW* TerminalWindow::rootWindow() const {
