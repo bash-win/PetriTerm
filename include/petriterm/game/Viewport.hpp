@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include "petriterm/engine/ScreenRegion.hpp"
+
 namespace petriterm::game {
 
 /// An on-screen character cell, in absolute terminal coordinates.
@@ -18,9 +20,21 @@ struct ScreenCell {
 class Viewport {
 public:
     /// Constructs a viewport for a world of the given tile dimensions displayed
-    /// in the given screen region (absolute terminal coordinates).
-    Viewport(int worldWidthInTiles, int worldHeightInTiles, int screenLeftColumn,
-             int screenTopRow, int screenWidth, int screenHeight);
+    /// in the given screen region (absolute terminal coordinates). The world size
+    /// is fixed for the viewport's life; the screen region is not, because the
+    /// terminal it is measured against can be resized under us.
+    Viewport(int worldWidthInTiles, int worldHeightInTiles,
+             const engine::ScreenRegion& screenRegion);
+
+    /// Moves and resizes the screen region this camera projects into, called on
+    /// every relayout.
+    ///
+    /// The camera is re-clamped rather than recentred: growing the view past the
+    /// world edge pulls the camera back so no out-of-world tiles come into view,
+    /// and shrinking it leaves the top-left tile where it was. Holding the
+    /// top-left fixed is what makes a resize feel like the window changing size
+    /// over a stationary map rather than the map jumping.
+    void setScreenRegion(const engine::ScreenRegion& screenRegion);
 
     /// Scrolls the camera by the given tile deltas, clamped so the view stays
     /// within the world bounds.
@@ -44,16 +58,15 @@ public:
     int visibleHeightInTiles() const;
 
 private:
+    int scrollSpanInColumns() const;
+    int scrollSpanInRows() const;
     int maximumCameraColumn() const;
     int maximumCameraRow() const;
     void clampCameraToWorldBounds();
 
     int worldWidthInTiles;
     int worldHeightInTiles;
-    int screenLeftColumn;
-    int screenTopRow;
-    int screenWidth;
-    int screenHeight;
+    engine::ScreenRegion screenRegion;
     int cameraColumn = 0;
     int cameraRow = 0;
 };

@@ -24,12 +24,20 @@ public:
     /// ticks as elapsed time allows, renders one frame, and sleeps to hold the
     /// target frame rate.
     ///
+    /// Owns the resize path, because a resize is a property of the terminal
+    /// rather than of whatever scene happens to be on top: the loop adopts the
+    /// new size and lays out the whole scene stack for it before dispatching any
+    /// further input, so no scene needs a case for it and every scene is handled
+    /// the same way. Scenes are also laid out once before the first frame, which
+    /// is what lets a scene take no dimensions at construction.
+    ///
     /// While the terminal is below the minimum playable size the loop shows a
     /// resize notice instead of the scene stack, still polling input so the
-    /// player can quit. The check runs every frame, so startup in a small
-    /// terminal and shrinking one mid-game behave identically.
+    /// player can quit. The check runs every frame and again after every resize,
+    /// so startup in a small terminal and shrinking one mid-game behave
+    /// identically, and growing one back recovers.
     void runUntilExitRequested(SceneManager& sceneManager, InputManager& inputManager,
-                               Renderer& renderer, const TerminalWindow& terminal);
+                               Renderer& renderer, TerminalWindow& terminal);
 
 private:
     int targetRenderFramesPerSecond;

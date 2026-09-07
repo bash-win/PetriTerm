@@ -5,12 +5,12 @@ each sized to review on its own.
 
 ## Status
 
-Merged through PR #18. Engine (terminal, palette, renderer, text measure, input,
-grid, RNG, scenes, clock, loop), world (noise, biomes, tiles, generation,
-climate), organisms (categories, traits, species, registry, `Organism`),
-simulation (`SimulationEngine`, its four-phase tick, the nutrient cycle, and the
-census), game (viewport, placement, starter ecosystem, headless runs). 145 tests,
-one of them a soak run over whole simulated worlds.
+Merged through PR #19. Engine (terminal, palette, renderer, text measure, input,
+grid, RNG, scenes, screen regions, relayout, clock, loop), world (noise, biomes,
+tiles, generation, climate), organisms (categories, traits, species, registry,
+`Organism`), simulation (`SimulationEngine`, its four-phase tick, the nutrient
+cycle, and the census), game (viewport, placement, starter ecosystem, headless
+runs). 167 tests, one of them a soak run over whole simulated worlds.
 CI runs clang-format, clang-tidy, gcc, clang.
 
 ## What's actually broken or missing
@@ -19,10 +19,9 @@ CI runs clang-format, clang-tidy, gcc, clang.
 - The nutrient cycle is simulated but invisible. Soil and detritus move every
   tick and the HUD shows neither, so a plot going barren looks like plants dying
   for no reason. PR 07 is where that readout belongs.
-- Resize is decoded and dropped. `InputManager` maps `KEY_RESIZE` to
-  `KeyCode::Resize`, but nothing handles it, `resizeterm()` is never called, and
-  `Viewport` plus the help-bar row are fixed at construction. Any resize —
-  including opening a tmux split — corrupts the layout.
+- `SIGTSTP`/`SIGCONT` are unhandled, so Ctrl+Z and `fg` leave the screen wrong.
+  Resize is handled now, but only because ncurses delivers it as a key event;
+  nothing installs a `SIGWINCH` handler. PR 19.
 - `panelw` is a `REQUIRED` dependency in `CMakeLists.txt:17` and the code never
   calls it. Glyphs are Unicode-only with no ASCII fallback. The monochrome path
   in `ColorPalette` is unexercised. CI is Linux-only.
@@ -276,15 +275,58 @@ predator-prey oscillation legible instead of inferred.
 
 # Milestone C — Run in every terminal
 
-## 15. `resize-and-relayout`
+## 15. `resize-and-relayout` — done
 
-Fix the dropped resize. Call `resizeterm()`, add a relayout hook to `Scene`, give
-`Viewport` a `setScreenRegion()`, stop capturing layout constants at
-construction, and have `SceneManager` propagate the new size through the stack.
-A bug fix, not a feature.
+New: `ScreenRegion`, `Scene::relayout`, `SceneManager::relayoutAllScenes`,
+`Viewport::setScreenRegion`, `TerminalWindow::adoptResizedTerminal`, and
+`KeyCode::Resize` handling in `GameLoop`. `tests/test_screen_region.cpp` and
+`tests/test_scene_manager.cpp`.
 
-Done when: resizing between 80x24 and full-screen, and crossing the too-small
-threshold both ways, always leaves a correct layout.
+Done: driven through a pty at 120x40, 80x24, 200x60, 70x20 and back to 100x30.
+The layout tracks every step, the help bar stays on the last row, and the
+too-small notice appears and clears at the threshold in both directions.
+
+Three decisions worth keeping, because each of them is a place the obvious
+version is wrong:
+
+- **The loop owns the resize, not the scene.** `KeyCode::Resize` is intercepted
+  in `GameLoop`'s input drain and never dispatched. It has to be: the curses
+  screen must be resized before anything is laid out against it, and that is true
+  whatever scene is on top. It also has to happen *before* the too-small check,
+  because that branch drops all input but the quit key — and growing a too-small
+  terminal back is itself a resize event, so handling it there would have made the
+  notice a dead end.
+- **The whole stack is laid out, not just the active scene.** A scene under an
+  overlay keeps updating and is what the player returns to; laid out lazily on
+  becoming active again, it would draw one frame at the old size.
+  `SceneManager` also remembers the region and applies it to any scene pushed
+  later, which is what lets a scene constructor take no dimensions at all —
+  including one built inside a `SceneTransition` by code that never saw a
+  terminal.
+- **`Scene::relayout` is pure virtual on purpose.** A no-op default would make a
+  scene that forgot to lay out indistinguishable from one with nothing to lay
+  out, and the difference is invisible until someone opens a tmux split. This is
+  the hook the roadmap's "cheap now, expensive later" note is about, so it is a
+  compile error to leave out.
+
+`resizeterm()` turned out to be belt-and-braces rather than the fix. ncurses'
+own SIGWINCH handling already calls it before delivering `KEY_RESIZE`, so the
+visible corruption was never a wrongly-sized `stdscr` — it was `Viewport` and the
+help-bar row holding numbers captured at construction. `adoptResizedTerminal`
+calls it anyway, guarded by a size comparison, so the resize path does not depend
+on which ncurses build this is. The load-bearing part of that function is the
+`clearok`: curses diffs each frame against its picture of the terminal, and a
+resize invalidates that picture in ways it cannot model.
+
+The camera holds its top-left tile across a resize rather than recentring, so the
+window changes size over a stationary map. Growing past the world edge pulls the
+camera back instead of showing out-of-world tiles, and a region that collapses to
+nothing still keeps the camera inside the world — it grows back, and whatever
+position survived is the one the player returns to.
+
+`WorldViewScene`'s split is still one help-bar row off the bottom with the HUD
+overdrawing the map, which PR 08 replaces. What changed is that it is recomputed
+rather than captured.
 
 ## 16. `curses-portability`
 
@@ -373,7 +415,7 @@ because it will surface every remaining ncurses assumption in the engine.
 
 ## Order
 
-15 → 16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if the soak
+16 → 17 → 18, then 05 → 06 → 07 → 08, then 09 → 10 → 11, then 04 if the soak
 runs call for it, then 12 → 13 → 14, then 19 → 20 → 21 → 22 → 23 → 24 → 25.
 
 04 is now called for. The balance pass left the world carrying 25,000 to 35,000
@@ -386,9 +428,10 @@ PR of its own rather than the tail of the harness, and renumbering everything
 below it would break the correspondence between these numbers and the branch
 names already merged.
 
-Two traps. 15 through 18 are cheap now and expensive later: every panel built in
-Milestone B without a relayout hook and a glyph/color abstraction is a panel to
-retrofit with one.
+Two traps. 16 through 18 are cheap now and expensive later: every panel built in
+Milestone B without a glyph/color abstraction is a panel to retrofit with one.
+15 was the other half of that and is done, so the relayout hook is in place
+before the first panel is written.
 
 And 03 should come before anything else that sets an ecology constant. It was
 listed after 02 and that was the wrong way round — 02's rates had to be picked

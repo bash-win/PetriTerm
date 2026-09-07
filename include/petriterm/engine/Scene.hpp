@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include "petriterm/engine/ScreenRegion.hpp"
+
 namespace petriterm::engine {
 
 class Renderer;
@@ -55,6 +57,21 @@ public:
     Scene& operator=(const Scene&) = delete;
     Scene(Scene&&) = delete;
     Scene& operator=(Scene&&) = delete;
+
+    /// Assigns the region of the terminal this scene draws into, and is the only
+    /// place a scene is permitted to work out where its panes go.
+    ///
+    /// Pure virtual rather than a no-op default on purpose: a scene that ignores
+    /// this is a scene whose layout is wrong the first time the player opens a
+    /// tmux split, and that mistake is invisible until someone resizes. Making it
+    /// a compile error to leave out means a scene with genuinely nothing to lay
+    /// out says so in one empty override, rather than being indistinguishable
+    /// from one that forgot.
+    ///
+    /// The SceneManager calls this before the scene's first update or render and
+    /// again on every resize, so an implementation can treat it as the single
+    /// source of its geometry and hold no dimensions from construction.
+    virtual void relayout(const ScreenRegion& screenRegion) = 0;
 
     /// Advances this scene's state by the given fixed tick duration in seconds.
     virtual void update(double tickDeltaSeconds) = 0;

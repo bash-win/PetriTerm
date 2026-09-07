@@ -8,6 +8,7 @@
 #include "petriterm/engine/InputManager.hpp"
 #include "petriterm/engine/Renderer.hpp"
 #include "petriterm/engine/SceneManager.hpp"
+#include "petriterm/engine/ScreenRegion.hpp"
 #include "petriterm/engine/SimulationClock.hpp"
 #include "petriterm/engine/TerminalWindow.hpp"
 
@@ -55,6 +56,12 @@ bool isQuitKey(const KeyEvent& event) {
            (event.character == L'q' || event.character == L'Q');
 }
 
+/// Returns true if the terminal is large enough for scenes to lay out in.
+bool isPlayableSize(TerminalDimensions dimensions) {
+    return dimensions.columns >= kMinimumTerminalColumns &&
+           dimensions.rows >= kMinimumTerminalRows;
+}
+
 }
 
 GameLoop::GameLoop(int targetRenderFramesPerSecond, SimulationClock& simulationClock)
@@ -62,7 +69,7 @@ GameLoop::GameLoop(int targetRenderFramesPerSecond, SimulationClock& simulationC
       simulationClock(simulationClock) {}
 
 void GameLoop::runUntilExitRequested(SceneManager& sceneManager, InputManager& inputManager,
-                                     Renderer& renderer, const TerminalWindow& terminal) {
+                                     Renderer& renderer, TerminalWindow& terminal) {
     const double targetFrameSeconds =
         1.0 / static_cast<double>(targetRenderFramesPerSecond);
     auto previousFrameStart = SecondsClock::now();
@@ -77,17 +84,42 @@ void GameLoop::runUntilExitRequested(SceneManager& sceneManager, InputManager& i
         }
     };
 
+    // Scenes are handed the whole screen; dividing it up is each scene's own
+    // business. Skipped when the size has not changed so a burst of KEY_RESIZE
+    // events - which a terminal dragged by its corner produces plenty of - costs
+    // one relayout rather than one per event.
+    const auto layOutScenesForTerminal = [&sceneManager](TerminalDimensions dimensions) {
+        const ScreenRegion wholeScreen{0, 0, dimensions.columns, dimensions.rows};
+        if (sceneManager.currentScreenRegion() != wholeScreen) {
+            sceneManager.relayoutAllScenes(wholeScreen);
+        }
+    };
+
+    layOutScenesForTerminal(terminal.currentDimensions());
+
     while (!sceneManager.exitRequested() && sceneManager.hasActiveScene()) {
         const auto frameStart = SecondsClock::now();
         const double elapsedSeconds = secondsBetween(previousFrameStart, frameStart);
         previousFrameStart = frameStart;
 
-        const TerminalDimensions dimensions = terminal.currentDimensions();
-        const bool terminalIsPlayable = dimensions.columns >= kMinimumTerminalColumns &&
-                                        dimensions.rows >= kMinimumTerminalRows;
+        TerminalDimensions dimensions = terminal.currentDimensions();
+        bool terminalIsPlayable = isPlayableSize(dimensions);
 
         inputManager.pollPendingKeyEvents();
         while (const std::optional<KeyEvent> event = inputManager.takeNextKeyEvent()) {
+            if (event->code == KeyCode::Resize) {
+                // Adopted here instead of dispatched to the active scene: the
+                // curses screen has to be resized before anything is laid out
+                // against it, and that is true no matter which scene is on top or
+                // whether the terminal is currently playable at all. Dropping it
+                // into the unplayable branch below would make a too-small
+                // terminal unrecoverable, since growing it back is itself a
+                // resize event.
+                dimensions = terminal.adoptResizedTerminal();
+                terminalIsPlayable = isPlayableSize(dimensions);
+                layOutScenesForTerminal(dimensions);
+                continue;
+            }
             if (!terminalIsPlayable) {
                 // Scenes cannot lay out at this size, so honor only the quit key
                 // and drop the rest rather than delivering input the player

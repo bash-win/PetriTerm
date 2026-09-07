@@ -41,9 +41,28 @@ public:
     TerminalWindow(TerminalWindow&&) = delete;
     TerminalWindow& operator=(TerminalWindow&&) = delete;
 
-    /// Returns the current terminal size in character cells, re-queried each call
-    /// so callers observe resizes immediately.
+    /// Returns the size curses currently believes the terminal is, in character
+    /// cells, re-queried each call.
+    ///
+    /// This tracks the curses screen rather than the terminal, and the two differ
+    /// between the moment the window changes and the moment the resize is adopted
+    /// - so a caller that wants the live size calls adoptResizedTerminal first.
     TerminalDimensions currentDimensions() const;
+
+    /// Re-synchronizes the curses screen with the terminal's real size and
+    /// returns the adopted dimensions.
+    ///
+    /// Call this on a KeyCode::Resize event. Until it runs, stdscr keeps its old
+    /// size: writes beyond it are silently clipped and everything laid out
+    /// against the old size stays where it was, which is what makes an unhandled
+    /// resize look like a corrupted screen rather than a stale one.
+    ///
+    /// Also marks the screen for a full repaint. Curses diffs each frame against
+    /// its picture of what the terminal is showing, and a resize invalidates that
+    /// picture in ways it cannot model - the terminal has reflowed or discarded
+    /// content on its own - so the next frame has to redraw every cell instead of
+    /// only the ones the game changed.
+    TerminalDimensions adoptResizedTerminal();
 
     /// Returns the full-screen window ncurses created at initialization, for
     /// handing to a Renderer. Exposed here, from the class that already owns the
